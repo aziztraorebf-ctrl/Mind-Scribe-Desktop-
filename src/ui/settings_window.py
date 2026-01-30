@@ -250,6 +250,7 @@ class SettingsWindow:
         self._hotkey_btn.bind("<Leave>", lambda e: self._hotkey_btn.config(bg=ACCENT))
 
         self._capturing_hotkey = False
+        self._capture_finalized = False
         self._captured_keys: set[str] = set()
         self._key_listener = None
 
@@ -300,7 +301,8 @@ class SettingsWindow:
             return
         self._capturing_hotkey = True
         self._captured_keys.clear()
-        self._hotkey_label.config(text="Press keys...", fg=ACCENT)
+        self._capture_finalized = False
+        self._hotkey_label.config(text="Press your shortcut...", fg=ACCENT)
         self._hotkey_btn.config(text="  Cancel  ")
         self._hotkey_btn.unbind("<Button-1>")
         self._hotkey_btn.bind("<Button-1>", lambda e: self._cancel_hotkey_capture())
@@ -312,17 +314,22 @@ class SettingsWindow:
         )
         self._key_listener.daemon = True
         self._key_listener.start()
+        logger.info("Hotkey capture started")
 
     def _cancel_hotkey_capture(self) -> None:
         """Cancel hotkey capture and restore previous value."""
         self._stop_capture()
         self._hotkey_label.config(text=self._format_hotkey(self._hotkey_value), fg=FG)
+        logger.info("Hotkey capture cancelled")
 
     def _stop_capture(self) -> None:
         """Stop the key capture listener."""
         self._capturing_hotkey = False
         if self._key_listener is not None:
-            self._key_listener.stop()
+            try:
+                self._key_listener.stop()
+            except Exception:
+                pass
             self._key_listener = None
         self._hotkey_btn.config(text="  Change  ")
         self._hotkey_btn.unbind("<Button-1>")
@@ -330,33 +337,52 @@ class SettingsWindow:
 
     def _on_capture_press(self, key) -> None:
         """Capture keys as they are pressed."""
+        if self._capture_finalized:
+            return
         key_id = self._key_to_pynput(key)
-        if key_id:
-            self._captured_keys.add(key_id)
-            # Update label to show current combination
-            if self._tk_root:
-                display = self._format_hotkey("+".join(sorted(self._captured_keys)))
-                self._tk_root.after(0, lambda: self._hotkey_label.config(text=display, fg=ACCENT))
+        if not key_id:
+            return
+        self._captured_keys.add(key_id)
+        # Update label to show current combination
+        if self._tk_root:
+            display = self._format_hotkey("+".join(sorted(self._captured_keys)))
+            self._tk_root.after(0, lambda d=display: self._hotkey_label.config(text=d, fg=ACCENT))
 
     def _on_capture_release(self, key) -> None:
-        """When a key is released, finalize the capture if we have a valid combo."""
-        if not self._capturing_hotkey:
+        """When ALL keys are released, finalize the capture if valid."""
+        if not self._capturing_hotkey or self._capture_finalized:
             return
-        # Need at least one modifier + one regular key
-        modifiers = {k for k in self._captured_keys if k.startswith("<") and k not in ("<space>",)}
-        regular = self._captured_keys - modifiers
-        if modifiers and regular:
-            # Valid combination
-            combo = "+".join(sorted(modifiers) + sorted(regular))
+
+        key_id = self._key_to_pynput(key)
+        if not key_id:
+            return
+
+        # Only finalize when the non-modifier key is released
+        # (user presses Ctrl+Shift+X, we finalize when X is released)
+        _MODIFIERS = {"<ctrl>", "<shift>", "<alt>", "<cmd>"}
+        if key_id in _MODIFIERS:
+            # A modifier was released -- don't finalize yet unless there's
+            # already a non-modifier captured
+            return
+
+        # Non-modifier released: check if we have a valid combo
+        modifiers = self._captured_keys & _MODIFIERS
+        non_modifiers = self._captured_keys - _MODIFIERS
+        if modifiers and non_modifiers:
+            # Build combo: sorted modifiers + sorted regular keys
+            combo = "+".join(sorted(modifiers) + sorted(non_modifiers))
             self._hotkey_value = combo
+            self._capture_finalized = True
+            logger.info("Hotkey captured: %s", combo)
             if self._tk_root:
                 self._tk_root.after(0, self._finalize_hotkey_capture)
 
     def _finalize_hotkey_capture(self) -> None:
-        """Apply captured hotkey."""
+        """Apply captured hotkey and update UI."""
         self._stop_capture()
-        self._hotkey_label.config(text=self._format_hotkey(self._hotkey_value), fg=FG)
-        logger.info("Hotkey captured: %s", self._hotkey_value)
+        display = self._format_hotkey(self._hotkey_value)
+        self._hotkey_label.config(text=display, fg=FG)
+        logger.info("Hotkey set to: %s (%s)", display, self._hotkey_value)
 
     @staticmethod
     def _key_to_pynput(key) -> str:
@@ -425,12 +451,22 @@ class SettingsWindow:
         except Exception:
             pass
 
-        device_names = ["System Default"]
+        # Build device list with active device promoted to top
+        default_entry = None
+        other_entries = []
         for dev in self._devices:
             label = dev["name"]
-            if label == default_marker:
-                label += " [current]"
-            device_names.append(f"{label} (#{dev['index']})")
+            is_default = (label == default_marker)
+            entry = f"{label} (#{dev['index']})"
+            if is_default:
+                default_entry = f"* {label} [active] (#{dev['index']})"
+            else:
+                other_entries.append(entry)
+
+        device_names = ["System Default"]
+        if default_entry:
+            device_names.append(default_entry)
+        device_names.extend(other_entries)
 
         current = "System Default"
         if self._settings.input_device is not None:
@@ -438,8 +474,9 @@ class SettingsWindow:
                 if dev["index"] == self._settings.input_device:
                     label = dev["name"]
                     if label == default_marker:
-                        label += " [current]"
-                    current = f"{label} (#{dev['index']})"
+                        current = f"* {label} [active] (#{dev['index']})"
+                    else:
+                        current = f"{label} (#{dev['index']})"
                     break
 
         if self._tk_root is not None:
@@ -479,15 +516,17 @@ class SettingsWindow:
         # Post-process
         self._settings.post_process = self._post_process_var.get()
 
-        # Device
+        # Device (match by index number in the label)
         device_label = self._device_var.get()
         if device_label == "System Default" or device_label == "Loading...":
             self._settings.input_device = None
         else:
-            for dev in self._devices:
-                if f"{dev['name']} (#{dev['index']})" == device_label:
-                    self._settings.input_device = dev["index"]
-                    break
+            import re
+            idx_match = re.search(r"#(\d+)\)$", device_label)
+            if idx_match:
+                self._settings.input_device = int(idx_match.group(1))
+            else:
+                self._settings.input_device = None
 
         # Record Mode
         mode_label = self._mode_var.get()
