@@ -14,6 +14,7 @@ from src.core.text_inserter import insert_text
 from src.core.transcriber import Transcriber, TranscriptionError
 from src.ui.notification import notify
 from src.ui.overlay import RecordingOverlay
+from src.ui.settings_window import SettingsWindow
 from src.ui.tray_icon import TrayIcon
 
 logger = logging.getLogger(__name__)
@@ -64,8 +65,15 @@ class MindScribeApp:
         # System tray
         self.tray = TrayIcon(
             on_toggle=self._on_hotkey_toggle,
+            on_settings=self._open_settings,
             on_quit=self._request_quit,
             hotkey_display=self.hotkey_manager.hotkey_display,
+        )
+
+        # Settings window
+        self.settings_window = SettingsWindow(
+            settings=self.settings,
+            on_save=self._on_settings_saved,
         )
 
         # Floating overlay
@@ -103,6 +111,11 @@ class MindScribeApp:
         self.hotkey_manager.start()
         self.tray.start()
         self.overlay.start()
+
+        # Share the overlay's tk root with the settings window
+        if self.overlay.tk_root is not None:
+            self.settings_window.set_tk_root(self.overlay.tk_root)
+
         logger.info(
             "MindScribe Desktop started. Press %s to toggle recording.",
             self.hotkey_manager.hotkey_display,
@@ -123,6 +136,30 @@ class MindScribeApp:
         self.stop()
         if self.on_quit_request:
             self.on_quit_request()
+
+    def _open_settings(self) -> None:
+        """Open the settings window."""
+        self.settings_window.open()
+
+    def _on_settings_saved(self, settings: Settings) -> None:
+        """Apply updated settings to live components."""
+        logger.info("Settings updated. Applying changes...")
+
+        # Update transcriber with new settings
+        self.transcriber.language = settings.language
+        self.transcriber.model = settings.whisper_model
+        self.transcriber.prompt = settings.prompt
+        self.transcriber.primary_provider = settings.primary_provider
+
+        # Update recorder device (takes effect on next recording)
+        self.recorder.device = settings.input_device
+
+        logger.info(
+            "Applied: language=%s, model=%s, provider=%s",
+            settings.language,
+            settings.whisper_model,
+            settings.primary_provider,
+        )
 
     def _on_hotkey_toggle(self) -> None:
         """Handle hotkey press - toggle between recording and idle."""

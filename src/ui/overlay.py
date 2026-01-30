@@ -55,6 +55,11 @@ class RecordingOverlay:
         self.on_cancel: Callable[[], None] | None = None
         self.on_pause: Callable[[], None] | None = None
 
+    @property
+    def tk_root(self) -> tk.Tk | None:
+        """The underlying tk.Tk root (available after start())."""
+        return self._root
+
     def set_audio_source(
         self,
         get_levels: Callable[[], list[float]],
