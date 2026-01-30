@@ -59,7 +59,10 @@ class MindScribeApp:
         )
         self.hotkey_manager = HotkeyManager(
             on_toggle=self._on_hotkey_toggle,
+            on_hold_start=self._on_hold_start,
+            on_hold_stop=self._on_hold_stop,
             hotkey_combo=self.settings.hotkey,
+            mode=self.settings.record_mode,
         )
 
         # System tray
@@ -154,11 +157,16 @@ class MindScribeApp:
         # Update recorder device (takes effect on next recording)
         self.recorder.device = settings.input_device
 
+        # Update hotkey manager mode and hotkey
+        self.hotkey_manager.mode = settings.record_mode
+        self.hotkey_manager.update_hotkey(settings.hotkey)
+
         logger.info(
-            "Applied: language=%s, model=%s, provider=%s",
+            "Applied: language=%s, model=%s, provider=%s, mode=%s",
             settings.language,
             settings.whisper_model,
             settings.primary_provider,
+            settings.record_mode,
         )
 
     def _on_hotkey_toggle(self) -> None:
@@ -169,6 +177,18 @@ class MindScribeApp:
             elif self._state in (AppState.RECORDING, AppState.PAUSED):
                 self._stop_and_transcribe()
             # If TRANSCRIBING, ignore the hotkey (still processing)
+
+    def _on_hold_start(self) -> None:
+        """Handle hotkey hold start - begin recording."""
+        with self._lock:
+            if self._state == AppState.IDLE:
+                self._start_recording()
+
+    def _on_hold_stop(self) -> None:
+        """Handle hotkey hold release - stop and transcribe."""
+        with self._lock:
+            if self._state in (AppState.RECORDING, AppState.PAUSED):
+                self._stop_and_transcribe()
 
     def _on_overlay_stop(self) -> None:
         """Handle Stop button from overlay.
@@ -271,6 +291,11 @@ class MindScribeApp:
                 texts.append(text)
 
             full_text = " ".join(texts)
+
+            # Optional LLM post-processing (clean up formatting)
+            if self.settings.post_process and full_text:
+                logger.info("Post-processing transcription...")
+                full_text = self.transcriber.post_process(full_text)
 
             # Insert into active field
             insert_text(

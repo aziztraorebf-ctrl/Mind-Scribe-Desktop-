@@ -142,3 +142,61 @@ class Transcriber:
         if not text:
             raise TranscriptionError("OpenAI returned empty transcription")
         return text
+
+    def post_process(self, raw_text: str) -> str:
+        """Clean up raw transcription using an LLM chat model.
+
+        Uses Groq (llama) or OpenAI (gpt-4o-mini) to format the raw
+        speech-to-text output into clean, well-punctuated text while
+        preserving the original meaning and content exactly.
+        """
+        system_prompt = (
+            "You are a text formatter. You receive raw speech-to-text transcription "
+            "and must return a clean, well-formatted version. Rules:\n"
+            "- Fix punctuation, capitalization, and paragraph breaks\n"
+            "- Remove filler words (euh, um, uh, hmm) and false starts\n"
+            "- Do NOT add, remove, or change any meaning or content\n"
+            "- Do NOT add opinions, commentary, introductions, or conclusions\n"
+            "- Do NOT summarize - keep ALL the original content\n"
+            "- Return ONLY the cleaned text, nothing else\n"
+            "- Preserve the original language (do not translate)"
+        )
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": raw_text},
+        ]
+
+        # Try Groq first (fast), then OpenAI
+        if self._groq:
+            try:
+                response = self._groq.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=messages,
+                    temperature=0.1,
+                    max_tokens=4096,
+                )
+                result = response.choices[0].message.content.strip()
+                if result:
+                    logger.info("Post-processed via Groq LLM (%d -> %d chars)", len(raw_text), len(result))
+                    return result
+            except Exception as exc:
+                logger.warning("Groq post-processing failed: %s", exc)
+
+        if self._openai:
+            try:
+                response = self._openai.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=messages,
+                    temperature=0.1,
+                    max_tokens=4096,
+                )
+                result = response.choices[0].message.content.strip()
+                if result:
+                    logger.info("Post-processed via OpenAI LLM (%d -> %d chars)", len(raw_text), len(result))
+                    return result
+            except Exception as exc:
+                logger.warning("OpenAI post-processing failed: %s", exc)
+
+        logger.warning("Post-processing failed, returning raw text")
+        return raw_text

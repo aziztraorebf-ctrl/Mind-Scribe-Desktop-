@@ -10,6 +10,8 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Callable
 
+from pynput import keyboard as pynput_kb
+
 from src.config.settings import Settings
 from src.core.audio_recorder import AudioRecorder
 
@@ -165,6 +167,7 @@ class SettingsWindow:
             state="readonly", style="Dark.TCombobox", width=38
         )
         self._provider_combo.pack(anchor="w", padx=24, pady=(0, 10))
+        self._provider_combo.bind("<<ComboboxSelected>>", lambda e: self._on_provider_changed())
 
         # Whisper Model
         self._add_field_label(scroll_frame, "Whisper Model")
@@ -175,7 +178,13 @@ class SettingsWindow:
             scroll_frame, textvariable=self._model_var, values=model_labels,
             state="readonly", style="Dark.TCombobox", width=38
         )
-        self._model_combo.pack(anchor="w", padx=24, pady=(0, 10))
+        self._model_combo.pack(anchor="w", padx=24, pady=(0, 2))
+        self._model_hint = ttk.Label(
+            scroll_frame, text="", style="Dim.TLabel"
+        )
+        self._model_hint.pack(anchor="w", padx=24, pady=(0, 10))
+        # Set initial state based on current provider
+        self._on_provider_changed()
 
         # Prompt
         self._add_field_label(scroll_frame, "Context Prompt (helps Whisper accuracy)")
@@ -186,6 +195,13 @@ class SettingsWindow:
         )
         self._prompt_text.insert("1.0", self._settings.prompt)
         self._prompt_text.pack(anchor="w", padx=24, pady=(0, 10))
+
+        # Post-processing
+        self._post_process_var = tk.BooleanVar(value=self._settings.post_process)
+        ttk.Checkbutton(
+            scroll_frame, text="Clean up text with LLM (fix punctuation, remove fillers)",
+            variable=self._post_process_var, style="Dark.TCheckbutton"
+        ).pack(anchor="w", padx=24, pady=(0, 10))
 
         # --- Recording Section ---
         self._add_section(scroll_frame, "Recording")
@@ -211,12 +227,31 @@ class SettingsWindow:
         )
         self._mode_combo.pack(anchor="w", padx=24, pady=(0, 10))
 
-        # Hotkey (read-only)
+        # Hotkey picker
         self._add_field_label(scroll_frame, "Hotkey")
-        hotkey_display = self._settings.hotkey.replace("<", "").replace(">", "").replace("+", " + ").title()
-        ttk.Label(scroll_frame, text=hotkey_display, style="Dim.TLabel").pack(
-            anchor="w", padx=24, pady=(0, 10)
+        hotkey_frame = tk.Frame(scroll_frame, bg=BG)
+        hotkey_frame.pack(anchor="w", padx=24, pady=(0, 10))
+
+        self._hotkey_value = self._settings.hotkey
+        hotkey_display = self._format_hotkey(self._hotkey_value)
+        self._hotkey_label = tk.Label(
+            hotkey_frame, text=hotkey_display, bg=BG_FIELD, fg=FG,
+            font=("Consolas", 11), padx=10, pady=4, width=25, anchor="w"
         )
+        self._hotkey_label.pack(side="left")
+
+        self._hotkey_btn = tk.Label(
+            hotkey_frame, text="  Change  ", bg=ACCENT, fg="#ffffff",
+            font=("Segoe UI", 9), cursor="hand2", padx=8, pady=4
+        )
+        self._hotkey_btn.pack(side="left", padx=(8, 0))
+        self._hotkey_btn.bind("<Button-1>", lambda e: self._start_hotkey_capture())
+        self._hotkey_btn.bind("<Enter>", lambda e: self._hotkey_btn.config(bg=ACCENT_HOVER))
+        self._hotkey_btn.bind("<Leave>", lambda e: self._hotkey_btn.config(bg=ACCENT))
+
+        self._capturing_hotkey = False
+        self._captured_keys: set[str] = set()
+        self._key_listener = None
 
         # --- Application Section ---
         self._add_section(scroll_frame, "Application")
@@ -259,23 +294,152 @@ class SettingsWindow:
 
         logger.info("Settings window opened")
 
+    def _start_hotkey_capture(self) -> None:
+        """Enter hotkey capture mode - listen for key combination."""
+        if self._capturing_hotkey:
+            return
+        self._capturing_hotkey = True
+        self._captured_keys.clear()
+        self._hotkey_label.config(text="Press keys...", fg=ACCENT)
+        self._hotkey_btn.config(text="  Cancel  ")
+        self._hotkey_btn.unbind("<Button-1>")
+        self._hotkey_btn.bind("<Button-1>", lambda e: self._cancel_hotkey_capture())
+
+        # Start pynput listener for key capture
+        self._key_listener = pynput_kb.Listener(
+            on_press=self._on_capture_press,
+            on_release=self._on_capture_release,
+        )
+        self._key_listener.daemon = True
+        self._key_listener.start()
+
+    def _cancel_hotkey_capture(self) -> None:
+        """Cancel hotkey capture and restore previous value."""
+        self._stop_capture()
+        self._hotkey_label.config(text=self._format_hotkey(self._hotkey_value), fg=FG)
+
+    def _stop_capture(self) -> None:
+        """Stop the key capture listener."""
+        self._capturing_hotkey = False
+        if self._key_listener is not None:
+            self._key_listener.stop()
+            self._key_listener = None
+        self._hotkey_btn.config(text="  Change  ")
+        self._hotkey_btn.unbind("<Button-1>")
+        self._hotkey_btn.bind("<Button-1>", lambda e: self._start_hotkey_capture())
+
+    def _on_capture_press(self, key) -> None:
+        """Capture keys as they are pressed."""
+        key_id = self._key_to_pynput(key)
+        if key_id:
+            self._captured_keys.add(key_id)
+            # Update label to show current combination
+            if self._tk_root:
+                display = self._format_hotkey("+".join(sorted(self._captured_keys)))
+                self._tk_root.after(0, lambda: self._hotkey_label.config(text=display, fg=ACCENT))
+
+    def _on_capture_release(self, key) -> None:
+        """When a key is released, finalize the capture if we have a valid combo."""
+        if not self._capturing_hotkey:
+            return
+        # Need at least one modifier + one regular key
+        modifiers = {k for k in self._captured_keys if k.startswith("<") and k not in ("<space>",)}
+        regular = self._captured_keys - modifiers
+        if modifiers and regular:
+            # Valid combination
+            combo = "+".join(sorted(modifiers) + sorted(regular))
+            self._hotkey_value = combo
+            if self._tk_root:
+                self._tk_root.after(0, self._finalize_hotkey_capture)
+
+    def _finalize_hotkey_capture(self) -> None:
+        """Apply captured hotkey."""
+        self._stop_capture()
+        self._hotkey_label.config(text=self._format_hotkey(self._hotkey_value), fg=FG)
+        logger.info("Hotkey captured: %s", self._hotkey_value)
+
+    @staticmethod
+    def _key_to_pynput(key) -> str:
+        """Convert a pynput key to its combo string representation."""
+        if isinstance(key, pynput_kb.Key):
+            name = key.name
+            if name in ("ctrl", "ctrl_l", "ctrl_r"):
+                return "<ctrl>"
+            if name in ("shift", "shift_l", "shift_r"):
+                return "<shift>"
+            if name in ("alt", "alt_l", "alt_r", "alt_gr"):
+                return "<alt>"
+            if name in ("cmd", "cmd_l", "cmd_r"):
+                return "<cmd>"
+            if name == "space":
+                return "<space>"
+            return f"<{name}>"
+        if isinstance(key, pynput_kb.KeyCode):
+            if key.char:
+                return key.char.lower()
+            if key.vk == 32:
+                return "<space>"
+        return ""
+
+    @staticmethod
+    def _format_hotkey(combo: str) -> str:
+        """Format a pynput combo string for display."""
+        return combo.replace("<", "").replace(">", "").replace("+", " + ").title()
+
+    def _on_provider_changed(self) -> None:
+        """Enable/disable model dropdown based on selected provider."""
+        provider_label = self._provider_var.get()
+        is_openai = provider_label == PROVIDER_LABELS["openai"]
+        if is_openai:
+            self._model_combo.configure(state="disabled")
+            self._model_hint.configure(text="OpenAI uses whisper-1 (fixed)")
+        else:
+            self._model_combo.configure(state="readonly")
+            self._model_hint.configure(text="")
+
     def _load_devices(self) -> None:
-        """Load audio devices in a background thread."""
+        """Load audio devices in a background thread, deduplicating by name."""
         try:
-            self._devices = AudioRecorder.list_devices()
+            all_devices = AudioRecorder.list_devices()
         except Exception as exc:
             logger.warning("Failed to list audio devices: %s", exc)
-            self._devices = []
+            all_devices = []
+
+        # Deduplicate: keep first occurrence of each device name
+        # (Windows exposes the same device via MME, DirectSound, WASAPI)
+        seen_names: set[str] = set()
+        self._devices = []
+        for dev in all_devices:
+            name = dev["name"]
+            if name not in seen_names:
+                seen_names.add(name)
+                self._devices.append(dev)
+
+        # Find system default device
+        default_marker = ""
+        try:
+            import sounddevice as sd
+            default_info = sd.query_devices(kind="input")
+            if default_info:
+                default_marker = default_info["name"]
+        except Exception:
+            pass
 
         device_names = ["System Default"]
         for dev in self._devices:
-            device_names.append(f"{dev['name']} (#{dev['index']})")
+            label = dev["name"]
+            if label == default_marker:
+                label += " [current]"
+            device_names.append(f"{label} (#{dev['index']})")
 
         current = "System Default"
         if self._settings.input_device is not None:
             for dev in self._devices:
                 if dev["index"] == self._settings.input_device:
-                    current = f"{dev['name']} (#{dev['index']})"
+                    label = dev["name"]
+                    if label == default_marker:
+                        label += " [current]"
+                    current = f"{label} (#{dev['index']})"
                     break
 
         if self._tk_root is not None:
@@ -312,6 +476,9 @@ class SettingsWindow:
         # Prompt
         self._settings.prompt = self._prompt_text.get("1.0", "end").strip()
 
+        # Post-process
+        self._settings.post_process = self._post_process_var.get()
+
         # Device
         device_label = self._device_var.get()
         if device_label == "System Default" or device_label == "Loading...":
@@ -328,6 +495,9 @@ class SettingsWindow:
             if label == mode_label:
                 self._settings.record_mode = code
                 break
+
+        # Hotkey
+        self._settings.hotkey = self._hotkey_value
 
         # App toggles
         self._settings.show_notifications = self._notif_var.get()
@@ -346,9 +516,11 @@ class SettingsWindow:
     def _on_close(self) -> None:
         """Close the settings window."""
         self._is_open = False
+        # Stop hotkey capture if active
+        if self._capturing_hotkey:
+            self._stop_capture()
         if self._window is not None:
             try:
-                # Unbind mousewheel to avoid affecting other windows
                 self._window.unbind_all("<MouseWheel>")
                 self._window.destroy()
             except Exception:

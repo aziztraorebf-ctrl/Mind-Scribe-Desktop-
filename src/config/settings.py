@@ -40,6 +40,7 @@ class Settings:
     # Transcription
     language: str = "fr"  # ISO-639-1 code
     prompt: str = "Transcription d'un developpeur logiciel francophone."
+    post_process: bool = False  # Clean up transcription via LLM
 
     # App
     auto_start: bool = False
