@@ -2,11 +2,15 @@
 
 import logging
 import math
+import platform
 import threading
 import tkinter as tk
 from typing import Callable
 
 logger = logging.getLogger(__name__)
+
+# OS-adaptive UI font
+_UI_FONT = "SF Pro Display" if platform.system() == "Darwin" else "Segoe UI"
 
 # Overlay dimensions
 WINDOW_WIDTH = 300
@@ -161,7 +165,7 @@ class RecordingOverlay:
             text="",
             fg=TEXT_COLOR,
             bg=BG_COLOR,
-            font=("Segoe UI", 9, "bold"),
+            font=(_UI_FONT, 9, "bold"),
             anchor="w",
         )
         self._status_label.pack(side="left")
@@ -232,7 +236,7 @@ class RecordingOverlay:
             text=f"  {text}  ",
             fg=fg,
             bg=bg,
-            font=("Segoe UI", 8),
+            font=(_UI_FONT, 8),
             cursor="hand2",
             relief="flat",
             padx=8,
@@ -255,7 +259,7 @@ class RecordingOverlay:
         if mode == "recording":
             self._status_label.config(
                 text="Recording", fg=RED_ACCENT,
-                font=("Segoe UI", 9, "bold"),
+                font=(_UI_FONT, 9, "bold"),
             )
             self._timer_label.config(font=("Consolas", 10))
             self._canvas.pack(side="top", padx=12, pady=(4, 4))
@@ -275,7 +279,7 @@ class RecordingOverlay:
             hotkey_text = getattr(self, "_ready_hotkey", "")
             self._status_label.config(
                 text="MindScribe Ready", fg=GREEN_ACCENT,
-                font=("Segoe UI", 11, "bold"),
+                font=(_UI_FONT, 11, "bold"),
             )
             self._timer_label.config(
                 text=hotkey_text, font=("Consolas", 11),

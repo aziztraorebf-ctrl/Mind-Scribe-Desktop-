@@ -16,6 +16,9 @@ from src.core.audio_recorder import AudioRecorder
 
 logger = logging.getLogger(__name__)
 
+# OS-adaptive UI font
+_UI_FONT = "SF Pro Display" if platform.system() == "Darwin" else "Segoe UI"
+
 # Language options: display label -> ISO-639-1 code
 LANGUAGE_OPTIONS = {
     "Francais": "fr",
@@ -136,15 +139,15 @@ class SettingsWindow:
         style = ttk.Style(self._window)
         style.theme_use("clam")
         style.configure("Dark.TFrame", background=BG)
-        style.configure("Dark.TLabel", background=BG, foreground=FG, font=("Segoe UI", 10))
-        style.configure("Section.TLabel", background=BG, foreground=SECTION_FG, font=("Segoe UI", 12, "bold"))
+        style.configure("Dark.TLabel", background=BG, foreground=FG, font=(_UI_FONT, 10))
+        style.configure("Section.TLabel", background=BG, foreground=SECTION_FG, font=(_UI_FONT, 12, "bold"))
         style.configure("Dim.TLabel", background=BG, foreground=FG_DIM, font=("Consolas", 10))
         style.configure("Dark.TCombobox", fieldbackground=BG_FIELD, background=BG_FIELD,
                          foreground=FG, selectbackground=ACCENT, selectforeground="#ffffff")
         style.map("Dark.TCombobox",
                   fieldbackground=[("readonly", BG_FIELD)],
                   foreground=[("readonly", FG)])
-        style.configure("Dark.TCheckbutton", background=BG, foreground=FG, font=("Segoe UI", 10))
+        style.configure("Dark.TCheckbutton", background=BG, foreground=FG, font=(_UI_FONT, 10))
         style.map("Dark.TCheckbutton", background=[("active", BG)])
 
         # Scrollable canvas
@@ -210,7 +213,7 @@ class SettingsWindow:
         self._add_field_label(scroll_frame, "Context Prompt (helps Whisper accuracy)")
         self._prompt_text = tk.Text(
             scroll_frame, width=40, height=3, bg=BG_FIELD, fg=FG,
-            insertbackground=FG, font=("Segoe UI", 10), relief="flat",
+            insertbackground=FG, font=(_UI_FONT, 10), relief="flat",
             wrap="word", padx=6, pady=4
         )
         self._prompt_text.insert("1.0", self._settings.prompt)
@@ -263,7 +266,7 @@ class SettingsWindow:
 
         self._test_btn = tk.Label(
             hotkey_frame, text="  Test  ", bg=ACCENT, fg="#ffffff",
-            font=("Segoe UI", 9), cursor="hand2", padx=8, pady=4
+            font=(_UI_FONT, 9), cursor="hand2", padx=8, pady=4
         )
         self._test_btn.pack(side="left", padx=(8, 0))
         self._test_btn.bind("<Button-1>", lambda e: self._test_hotkey())
@@ -298,7 +301,7 @@ class SettingsWindow:
 
         save_btn = tk.Label(
             btn_frame, text="  Save  ", bg=ACCENT, fg="#ffffff",
-            font=("Segoe UI", 10, "bold"), cursor="hand2", padx=16, pady=6
+            font=(_UI_FONT, 10, "bold"), cursor="hand2", padx=16, pady=6
         )
         save_btn.pack(side="right", padx=(8, 0))
         save_btn.bind("<Button-1>", lambda e: self._on_save_click())
@@ -307,7 +310,7 @@ class SettingsWindow:
 
         cancel_btn = tk.Label(
             btn_frame, text="  Cancel  ", bg=BTN_CANCEL_BG, fg="#cccccc",
-            font=("Segoe UI", 10), cursor="hand2", padx=16, pady=6
+            font=(_UI_FONT, 10), cursor="hand2", padx=16, pady=6
         )
         cancel_btn.pack(side="right")
         cancel_btn.bind("<Button-1>", lambda e: self._on_close())

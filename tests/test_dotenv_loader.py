@@ -23,7 +23,7 @@ class TestGetSearchDirs:
         assert any(d.exists() for d in dirs)
 
     def test_frozen_mode_includes_exe_directory(self, tmp_path):
-        fake_exe = tmp_path / "MindScribe.exe"
+        fake_exe = tmp_path / "MindScribe"
         fake_exe.touch()
         with patch.object(sys, 'frozen', True, create=True), \
              patch.object(sys, 'executable', str(fake_exe)):
@@ -31,7 +31,7 @@ class TestGetSearchDirs:
             assert tmp_path in dirs
 
     def test_frozen_mode_prioritizes_exe_directory(self, tmp_path):
-        fake_exe = tmp_path / "MindScribe.exe"
+        fake_exe = tmp_path / "MindScribe"
         fake_exe.touch()
         with patch.object(sys, 'frozen', True, create=True), \
              patch.object(sys, 'executable', str(fake_exe)):

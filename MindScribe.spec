@@ -9,6 +9,7 @@ Output:
 """
 
 import sys
+import platform
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
@@ -18,14 +19,35 @@ block_cipher = None
 sounddevice_data = collect_data_files('_sounddevice_data')
 
 # Collect plyer platform backends (lazy-loaded)
-plyer_imports = collect_submodules('plyer.platforms.win')
+if platform.system() == "Darwin":
+    plyer_imports = collect_submodules('plyer.platforms.macosx')
+else:
+    plyer_imports = collect_submodules('plyer.platforms.win')
+
+# Platform-specific hidden imports
+if platform.system() == "Darwin":
+    _platform_imports = [
+        'plyer.platforms.macosx',
+        'plyer.platforms.macosx.notification',
+        'pynput.keyboard._darwin',
+        'pynput.mouse._darwin',
+        'pystray._darwin',
+    ]
+else:
+    _platform_imports = [
+        'plyer.platforms.win',
+        'plyer.platforms.win.notification',
+        'pynput.keyboard._win32',
+        'pynput.mouse._win32',
+        'pystray._win32',
+    ]
 
 a = Analysis(
     ['run.py'],
     pathex=[],
     binaries=[],
     datas=sounddevice_data,
-    hiddenimports=[
+    hiddenimports=_platform_imports + [
         # App modules (PyInstaller may miss dynamic imports)
         'src',
         'src.app',
@@ -44,12 +66,6 @@ a = Analysis(
         'src.ui.overlay',
         'src.ui.settings_window',
         'src.ui.tray_icon',
-        # Third-party hidden imports
-        'plyer.platforms.win',
-        'plyer.platforms.win.notification',
-        'pynput.keyboard._win32',
-        'pynput.mouse._win32',
-        'pystray._win32',
         # audioop replacement for Python 3.13+
         'audioop_lts',
         'audioop',
@@ -88,7 +104,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,  # Disable UPX - avoids false antivirus positives
-    icon='assets/mindscribe.ico',
+    icon='assets/mindscribe.icns' if platform.system() == "Darwin" else 'assets/mindscribe.ico',
     console=False,  # No console window (GUI app)
     disable_windowed_traceback=False,
     argv_emulation=False,

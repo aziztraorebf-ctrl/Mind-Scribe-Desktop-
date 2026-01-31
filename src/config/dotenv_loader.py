@@ -11,11 +11,11 @@ def _get_search_dirs() -> list[Path]:
     """Return directories to search for .env file, ordered by priority.
 
     When running as a PyInstaller frozen executable, prioritizes
-    the directory containing the .exe so users can place .env next to it.
+    the directory containing the executable so users can place .env next to it.
     """
     dirs = []
 
-    # Frozen mode (PyInstaller): directory containing the .exe
+    # Frozen mode (PyInstaller): directory containing the executable
     if getattr(sys, 'frozen', False):
         exe_dir = Path(sys.executable).resolve().parent
         dirs.append(exe_dir)
