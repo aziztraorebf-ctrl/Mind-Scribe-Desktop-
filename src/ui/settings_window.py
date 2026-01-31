@@ -48,8 +48,6 @@ HOTKEY_PRESETS = {
     "<f9>": "F9",
     "<f8>": "F8",
     "<f7>": "F7",
-    "<numpad_plus>": "Numpad +",
-    f"{_MOD}+<alt>": f"{_MOD_LABEL} + Alt",
     f"{_MOD}+<alt>+<space>": f"{_MOD_LABEL} + Alt + Space",
 }
 HOTKEY_PRESET_LABELS = list(HOTKEY_PRESETS.values())
@@ -80,7 +78,6 @@ class SettingsWindow:
         self._is_open = False
         self._devices: list[dict] = []
         self._hotkey_manager = None
-        self._active_test_listener = None
 
     @property
     def is_open(self) -> bool:
@@ -331,7 +328,7 @@ class SettingsWindow:
         self._hotkey_test_label.config(
             text=f"Press {combo_label} now...", foreground=ACCENT
         )
-        self._test_btn.config(text=" Testing... ", bg=BTN_CANCEL_BG)
+        self._test_btn.config(text=" Testing... ", bg="#666666")
         self._test_btn.unbind("<Button-1>")
 
         # Pause the app's hotkey listener during test
@@ -361,13 +358,11 @@ class SettingsWindow:
         test_listener = kb.Listener(on_press=on_press, on_release=on_release)
         test_listener.daemon = True
         test_listener.start()
-        self._active_test_listener = test_listener
 
         def check_result():
             if self._test_result_shown or self._window is None:
                 return
             self._test_result_shown = True
-            self._active_test_listener = None
             try:
                 test_listener.stop()
             except Exception:
@@ -534,15 +529,6 @@ class SettingsWindow:
     def _on_close(self) -> None:
         """Close the settings window."""
         self._is_open = False
-        # Stop any active test listener and resume app hotkey listener
-        if self._active_test_listener is not None:
-            try:
-                self._active_test_listener.stop()
-            except Exception:
-                pass
-            self._active_test_listener = None
-            if self._hotkey_manager is not None:
-                self._hotkey_manager.resume()
         if self._window is not None:
             try:
                 self._window.unbind_all("<MouseWheel>")
