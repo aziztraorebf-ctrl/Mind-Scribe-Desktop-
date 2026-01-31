@@ -7,7 +7,7 @@ Inspired by [Wispr Flow](https://wisprflow.ai) and [groq_whisperer](https://gith
 ## Features
 
 ### Core
-- **Configurable global hotkey** with 9 OS-adaptive presets (single keys like F9, combos like Ctrl+Shift+Space, Numpad+)
+- **Configurable global hotkey** with 7 OS-adaptive presets (single keys like F9, combos like Ctrl+Shift+Space)
 - **Toggle and Hold modes** - press to start/stop, or hold to record
 - **Cloud transcription** via Groq API (whisper-large-v3) with OpenAI fallback
 - **LLM post-processing** - optional cleanup of punctuation, fillers, and formatting via Groq/OpenAI chat
@@ -124,7 +124,7 @@ Settings are stored in:
 | `language` | `"fr"` | Transcription language (ISO-639-1) |
 | `primary_provider` | `"groq"` | Primary API (`groq` or `openai`) |
 | `whisper_model` | `"whisper-large-v3"` | Whisper model variant |
-| `hotkey` | `Ctrl+Shift+Space` | Global shortcut (9 presets available) |
+| `hotkey` | `Ctrl+Shift+Space` / `Cmd+Shift+Space` | Global shortcut (7 presets available) |
 | `record_mode` | `"toggle"` | `toggle` (press to start/stop) or `hold` (hold to record) |
 | `post_process` | `false` | Clean up transcription with LLM (punctuation, fillers) |
 | `show_notifications` | `true` | System notifications |
@@ -195,6 +195,71 @@ Windows Security > Virus & threat protection > Manage settings > Exclusions > Ad
 
 The `dist\MindScribe\` folder is self-contained and can be copied or zipped for distribution. Users need to place their own `.env` file next to `MindScribe.exe`.
 
+## Building from Source (macOS)
+
+### Prerequisites
+
+- Python 3.11+ (tested with 3.14)
+- pip (included with Python)
+- Xcode Command Line Tools (`xcode-select --install`)
+
+### Steps
+
+1. Clone the repo:
+   ```bash
+   git clone https://github.com/aziztraorebf-ctrl/Mind-Scribe-Desktop-.git
+   cd Mind-Scribe-Desktop-
+   ```
+
+2. Create and activate a virtual environment:
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate
+   ```
+
+3. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. Configure API keys:
+   ```bash
+   cp .env.example .env
+   # Edit .env and add your GROQ_API_KEY and/or OPENAI_API_KEY
+   ```
+
+5. Run in dev mode (recommended for first test):
+   ```bash
+   python run.py
+   ```
+
+6. Build the standalone app (optional):
+   ```bash
+   chmod +x build.sh
+   ./build.sh
+   ```
+
+7. Run the built app:
+   ```bash
+   ./dist/MindScribe/MindScribe
+   ```
+
+### macOS Permissions
+
+macOS requires explicit permission for:
+- **Microphone**: System Preferences > Privacy & Security > Microphone (prompted automatically)
+- **Accessibility** (for global hotkeys): System Preferences > Privacy & Security > Accessibility > add Terminal (or the MindScribe app)
+- **Input Monitoring** (for pynput): System Preferences > Privacy & Security > Input Monitoring > add Terminal (or the MindScribe app)
+
+Without Accessibility + Input Monitoring permissions, global hotkeys will not work.
+
+### macOS Notes
+
+- Default hotkey is **Cmd+Shift+Space** (not Ctrl)
+- The app uses **SF Pro Display** font (native macOS)
+- Notifications use native macOS alerts via `osascript`
+- Config is stored in `~/Library/Application Support/MindScribeDesktop/config.json`
+
 ## Current Status
 
 ### Phase 1-3: Core MVP (complete)
@@ -207,20 +272,27 @@ The `dist\MindScribe\` folder is self-contained and can be copied or zipped for 
 - [x] Recording timer (freezes on pause)
 - [x] Overlay control buttons (Pause/Resume, Stop, Cancel)
 - [x] Draggable overlay (preserves position across state changes)
-- [x] 26 unit tests passing
 
 ### Phase 4: Settings UI (complete)
 - [x] Dark-themed settings dashboard (tkinter)
 - [x] Language, provider, model selection
 - [x] Microphone picker with deduplication and system default
 - [x] LLM post-processing toggle (punctuation cleanup, filler removal)
-- [x] Hotkey preset dropdown (9 OS-adaptive presets) with Test button
+- [x] Hotkey preset dropdown (7 OS-adaptive presets) with Test button
 - [x] Toggle/Hold record mode selection
 - [x] Notification and clipboard restore toggles
 
-### Phase 5: Planned
-- [ ] PyInstaller packaging (.exe / .app)
-- [ ] macOS testing and compatibility
+### Phase 5: Packaging & Cross-Platform (complete)
+- [x] PyInstaller packaging (Windows .exe, macOS binary)
+- [x] Custom application icon (Windows .ico, macOS .icns)
+- [x] Build scripts (build.ps1 for Windows, build.sh for macOS)
+- [x] Startup Ready overlay (centered, fade-in/out, green pulse, 10s)
+- [x] OS-adaptive fonts (Segoe UI / SF Pro Display)
+- [x] Cross-platform PyInstaller spec (conditional backends)
+- [x] 33 unit tests passing
+
+### Future
+- [ ] macOS end-to-end testing and polish
 - [ ] Auto-start at boot
 - [ ] Multi-language auto-detection
 - [ ] Network error handling improvements (adaptive retry for rate limits)
