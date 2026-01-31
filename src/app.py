@@ -120,6 +120,9 @@ class MindScribeApp:
         if self.overlay.tk_root is not None:
             self.settings_window.set_tk_root(self.overlay.tk_root)
 
+        # Show brief "Ready" overlay so the user knows the app is running
+        self.overlay.show_ready(self.hotkey_manager.hotkey_display)
+
         logger.info(
             "MindScribe Desktop started. Press %s to toggle recording.",
             self.hotkey_manager.hotkey_display,

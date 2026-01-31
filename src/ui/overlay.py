@@ -12,6 +12,11 @@ logger = logging.getLogger(__name__)
 WINDOW_WIDTH = 300
 WINDOW_HEIGHT_RECORDING = 110
 WINDOW_HEIGHT_TRANSCRIBING = 70
+WINDOW_WIDTH_READY = 400
+WINDOW_HEIGHT_READY = 70
+READY_DISPLAY_MS = 10000  # Auto-hide after 10 seconds
+FADE_IN_STEPS = 15
+FADE_IN_INTERVAL_MS = 33  # ~500ms total fade-in
 CANVAS_HEIGHT = 36
 BAR_COUNT = 32
 BAR_WIDTH = 4
@@ -28,6 +33,7 @@ BTN_RED = "#cc3333"
 BTN_RED_HOVER = "#ee4444"
 PAUSE_COLOR = "#ffaa00"
 PAUSE_HOVER = "#ffcc44"
+GREEN_ACCENT = "#22c55e"
 
 
 class RecordingOverlay:
@@ -42,7 +48,7 @@ class RecordingOverlay:
         self._thread: threading.Thread | None = None
         self._running = False
         self._animating = False
-        self._mode = "idle"  # "idle", "recording", "paused", "transcribing"
+        self._mode = "idle"  # "idle", "recording", "paused", "transcribing", "ready"
         self._ready = threading.Event()
         self._anim_phase = 0.0
 
@@ -110,6 +116,14 @@ class RecordingOverlay:
         self._animating = True
         if self._root:
             self._root.after(0, self._show_window, "transcribing")
+
+    def show_ready(self, hotkey_display: str) -> None:
+        """Show a brief 'Ready' overlay at startup, auto-hides after timeout."""
+        self._mode = "ready"
+        self._ready_hotkey = hotkey_display
+        self._animating = True  # Enable pulse animation
+        if self._root:
+            self._root.after(0, self._show_window, "ready")
 
     def hide(self) -> None:
         """Hide the overlay."""
@@ -239,7 +253,12 @@ class RecordingOverlay:
         current_y = self._root.winfo_y()
 
         if mode == "recording":
-            self._status_label.config(text="Recording", fg=RED_ACCENT)
+            self._status_label.config(
+                text="Recording", fg=RED_ACCENT,
+                font=("Segoe UI", 9, "bold"),
+            )
+            self._timer_label.config(font=("Consolas", 10))
+            self._canvas.pack(side="top", padx=12, pady=(4, 4))
             self._btn_frame.pack(side="top", fill="x", padx=12, pady=(0, 8))
             self._btn_pause.config(text="  Pause  ")
             self._root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT_RECORDING}+{current_x}+{current_y}")
@@ -249,8 +268,33 @@ class RecordingOverlay:
         elif mode == "transcribing":
             self._status_label.config(text="Transcribing...", fg=AMBER_ACCENT)
             self._timer_label.config(text="")
+            self._canvas.pack_forget()
             self._btn_frame.pack_forget()
             self._root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT_TRANSCRIBING}+{current_x}+{current_y}")
+        elif mode == "ready":
+            hotkey_text = getattr(self, "_ready_hotkey", "")
+            self._status_label.config(
+                text="MindScribe Ready", fg=GREEN_ACCENT,
+                font=("Segoe UI", 11, "bold"),
+            )
+            self._timer_label.config(
+                text=hotkey_text, font=("Consolas", 11),
+            )
+            self._canvas.pack_forget()
+            self._btn_frame.pack_forget()
+            # Center on screen
+            screen_w = self._root.winfo_screenwidth()
+            screen_h = self._root.winfo_screenheight()
+            rx = (screen_w - WINDOW_WIDTH_READY) // 2
+            ry = (screen_h - WINDOW_HEIGHT_READY) // 2
+            self._root.geometry(
+                f"{WINDOW_WIDTH_READY}x{WINDOW_HEIGHT_READY}+{rx}+{ry}"
+            )
+            # Fade-in from transparent
+            self._root.attributes("-alpha", 0.0)
+            self._fade_step = 0
+            self._root.after(FADE_IN_INTERVAL_MS, self._fade_in_tick)
+            self._root.after(READY_DISPLAY_MS, self._auto_hide_ready)
 
         self._root.deiconify()
 
@@ -275,6 +319,8 @@ class RecordingOverlay:
                 self._update_timer()
             elif self._mode == "transcribing":
                 self._draw_pulse_dots(canvas_w)
+            elif self._mode == "ready":
+                self._pulse_ready_text()
 
             self._anim_phase += 0.15
 
@@ -356,6 +402,57 @@ class RecordingOverlay:
                 fill=f"#{alpha_int:02x}{int(alpha_int * 0.65):02x}00",
                 outline="",
             )
+
+    def _pulse_ready_text(self) -> None:
+        """Pulse the 'MindScribe Ready' text color between green shades."""
+        if not self._status_label:
+            return
+        # Oscillate green intensity: base #22c55e, pulse brighter
+        pulse = (math.sin(self._anim_phase * 1.5) + 1) / 2  # 0 to 1
+        g_base, g_peak = 0x80, 0xFF
+        r_base, r_peak = 0x22, 0x66
+        b_base, b_peak = 0x3E, 0x7E
+        r = int(r_base + pulse * (r_peak - r_base))
+        g = int(g_base + pulse * (g_peak - g_base))
+        b = int(b_base + pulse * (b_peak - b_base))
+        self._status_label.config(fg=f"#{r:02x}{g:02x}{b:02x}")
+
+    def _fade_in_tick(self) -> None:
+        """Increment alpha for fade-in effect."""
+        if not self._root or self._mode != "ready":
+            return
+        self._fade_step += 1
+        alpha = min(0.92, self._fade_step * (0.92 / FADE_IN_STEPS))
+        try:
+            self._root.attributes("-alpha", alpha)
+        except Exception:
+            return
+        if self._fade_step < FADE_IN_STEPS:
+            self._root.after(FADE_IN_INTERVAL_MS, self._fade_in_tick)
+
+    def _auto_hide_ready(self) -> None:
+        """Auto-hide the ready overlay after timeout with fade-out."""
+        if self._mode == "ready":
+            self._fade_out_step = 0
+            self._root.after(FADE_IN_INTERVAL_MS, self._fade_out_tick)
+
+    def _fade_out_tick(self) -> None:
+        """Decrement alpha for fade-out effect, then hide."""
+        if not self._root or self._mode != "ready":
+            return
+        self._fade_out_step += 1
+        alpha = max(0.0, 0.92 - self._fade_out_step * (0.92 / FADE_IN_STEPS))
+        try:
+            self._root.attributes("-alpha", alpha)
+        except Exception:
+            return
+        if self._fade_out_step < FADE_IN_STEPS:
+            self._root.after(FADE_IN_INTERVAL_MS, self._fade_out_tick)
+        else:
+            self._mode = "idle"
+            self._animating = False
+            self._root.attributes("-alpha", 0.92)
+            self._hide_window()
 
     def _handle_stop(self) -> None:
         """Stop button pressed."""
