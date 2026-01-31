@@ -1,6 +1,7 @@
 """Audio recording using sounddevice with WAV output."""
 
 import io
+import logging
 import math
 import threading
 import time
@@ -10,6 +11,8 @@ from enum import Enum, auto
 
 import numpy as np
 import sounddevice as sd
+
+logger = logging.getLogger(__name__)
 
 # Number of recent RMS values to keep for waveform display
 _LEVEL_HISTORY_SIZE = 48
@@ -85,14 +88,32 @@ class AudioRecorder:
         self._level_history.clear()
         self._record_start_time = time.monotonic()
         self._elapsed_before_pause = 0.0
-        self._stream = sd.InputStream(
-            samplerate=self.sample_rate,
-            channels=self.channels,
-            dtype="int16",
-            device=self.device,
-            callback=self._audio_callback,
-        )
-        self._stream.start()
+        try:
+            self._stream = sd.InputStream(
+                samplerate=self.sample_rate,
+                channels=self.channels,
+                dtype="int16",
+                device=self.device,
+                callback=self._audio_callback,
+            )
+            self._stream.start()
+        except sd.PortAudioError:
+            if self.device is not None:
+                logger.warning(
+                    "Device %s unavailable, falling back to system default",
+                    self.device,
+                )
+                self.device = None
+                self._stream = sd.InputStream(
+                    samplerate=self.sample_rate,
+                    channels=self.channels,
+                    dtype="int16",
+                    device=None,
+                    callback=self._audio_callback,
+                )
+                self._stream.start()
+            else:
+                raise
         self._state = RecorderState.RECORDING
 
     def stop(self) -> bytes:

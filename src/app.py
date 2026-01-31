@@ -78,6 +78,7 @@ class MindScribeApp:
             settings=self.settings,
             on_save=self._on_settings_saved,
         )
+        self.settings_window.set_hotkey_manager(self.hotkey_manager)
 
         # Floating overlay
         self.overlay = RecordingOverlay()
@@ -157,16 +158,22 @@ class MindScribeApp:
         # Update recorder device (takes effect on next recording)
         self.recorder.device = settings.input_device
 
-        # Update hotkey manager mode and hotkey
-        self.hotkey_manager.mode = settings.record_mode
-        self.hotkey_manager.update_hotkey(settings.hotkey)
+        # Update hotkey manager (single restart, avoids double stop/start)
+        self.hotkey_manager.update(
+            new_combo=settings.hotkey,
+            new_mode=settings.record_mode,
+        )
+
+        # Update tray icon menu text with new hotkey
+        self.tray.update_hotkey_display(self.hotkey_manager.hotkey_display)
 
         logger.info(
-            "Applied: language=%s, model=%s, provider=%s, mode=%s",
+            "Applied: language=%s, model=%s, provider=%s, mode=%s, hotkey=%s",
             settings.language,
             settings.whisper_model,
             settings.primary_provider,
             settings.record_mode,
+            self.hotkey_manager.hotkey_display,
         )
 
     def _on_hotkey_toggle(self) -> None:
@@ -257,6 +264,8 @@ class MindScribeApp:
             self.tray.set_idle()
             self.overlay.hide()
             self._set_state(AppState.IDLE)
+            if self.settings.show_notifications:
+                notify("MindScribe", "No audio captured. Try speaking louder or check your microphone.")
             return
 
         duration = self.recorder.duration_seconds
@@ -280,6 +289,8 @@ class MindScribeApp:
 
             if not audio_chunks:
                 logger.warning("No audio data after preparation.")
+                if self.settings.show_notifications:
+                    notify("MindScribe", "Recording too short or empty.")
                 self._set_state(AppState.IDLE)
                 return
 

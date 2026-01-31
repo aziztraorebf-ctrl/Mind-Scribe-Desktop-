@@ -5,12 +5,11 @@ All UI operations are scheduled on the overlay's mainloop via root.after().
 """
 
 import logging
+import platform
 import threading
 import tkinter as tk
 from tkinter import ttk
 from typing import Callable
-
-from pynput import keyboard as pynput_kb
 
 from src.config.settings import Settings
 from src.core.audio_recorder import AudioRecorder
@@ -37,6 +36,24 @@ MODEL_LABELS = {
 # Record mode options
 RECORD_MODE_LABELS = {"toggle": "Toggle (press to start/stop)", "hold": "Hold (hold to record)"}
 
+# Hotkey presets: pynput combo string -> display label (OS-adaptive)
+_IS_MAC = platform.system() == "Darwin"
+_MOD = "<cmd>" if _IS_MAC else "<ctrl>"
+_MOD_LABEL = "Cmd" if _IS_MAC else "Ctrl"
+
+HOTKEY_PRESETS = {
+    f"{_MOD}+<shift>+<space>": f"{_MOD_LABEL} + Shift + Space (default)",
+    f"{_MOD}+<shift>+r": f"{_MOD_LABEL} + Shift + R",
+    f"{_MOD}+<shift>+d": f"{_MOD_LABEL} + Shift + D",
+    "<f9>": "F9",
+    "<f8>": "F8",
+    "<f7>": "F7",
+    "<numpad_plus>": "Numpad +",
+    f"{_MOD}+<alt>": f"{_MOD_LABEL} + Alt",
+    f"{_MOD}+<alt>+<space>": f"{_MOD_LABEL} + Alt + Space",
+}
+HOTKEY_PRESET_LABELS = list(HOTKEY_PRESETS.values())
+
 # Dark theme colors
 BG = "#1e1e2e"
 BG_FIELD = "#2a2a3e"
@@ -62,6 +79,8 @@ class SettingsWindow:
         self._window: tk.Toplevel | None = None
         self._is_open = False
         self._devices: list[dict] = []
+        self._hotkey_manager = None
+        self._active_test_listener = None
 
     @property
     def is_open(self) -> bool:
@@ -70,6 +89,10 @@ class SettingsWindow:
     def set_tk_root(self, root: tk.Tk) -> None:
         """Set the shared tk root (from the overlay thread)."""
         self._tk_root = root
+
+    def set_hotkey_manager(self, manager) -> None:
+        """Set reference to the HotkeyManager for pause/resume during test."""
+        self._hotkey_manager = manager
 
     def open(self) -> None:
         """Schedule opening the settings window on the tk mainloop thread."""
@@ -227,32 +250,33 @@ class SettingsWindow:
         )
         self._mode_combo.pack(anchor="w", padx=24, pady=(0, 10))
 
-        # Hotkey picker
+        # Hotkey
         self._add_field_label(scroll_frame, "Hotkey")
         hotkey_frame = tk.Frame(scroll_frame, bg=BG)
-        hotkey_frame.pack(anchor="w", padx=24, pady=(0, 10))
+        hotkey_frame.pack(anchor="w", padx=24, pady=(0, 2))
 
-        self._hotkey_value = self._settings.hotkey
-        hotkey_display = self._format_hotkey(self._hotkey_value)
-        self._hotkey_label = tk.Label(
-            hotkey_frame, text=hotkey_display, bg=BG_FIELD, fg=FG,
-            font=("Consolas", 11), padx=10, pady=4, width=25, anchor="w"
+        current_hotkey_label = _combo_to_preset_label(self._settings.hotkey)
+        self._hotkey_var = tk.StringVar(value=current_hotkey_label)
+        self._hotkey_combo_widget = ttk.Combobox(
+            hotkey_frame, textvariable=self._hotkey_var,
+            values=HOTKEY_PRESET_LABELS,
+            state="readonly", style="Dark.TCombobox", width=28
         )
-        self._hotkey_label.pack(side="left")
+        self._hotkey_combo_widget.pack(side="left")
 
-        self._hotkey_btn = tk.Label(
-            hotkey_frame, text="  Change  ", bg=ACCENT, fg="#ffffff",
+        self._test_btn = tk.Label(
+            hotkey_frame, text="  Test  ", bg=ACCENT, fg="#ffffff",
             font=("Segoe UI", 9), cursor="hand2", padx=8, pady=4
         )
-        self._hotkey_btn.pack(side="left", padx=(8, 0))
-        self._hotkey_btn.bind("<Button-1>", lambda e: self._start_hotkey_capture())
-        self._hotkey_btn.bind("<Enter>", lambda e: self._hotkey_btn.config(bg=ACCENT_HOVER))
-        self._hotkey_btn.bind("<Leave>", lambda e: self._hotkey_btn.config(bg=ACCENT))
+        self._test_btn.pack(side="left", padx=(8, 0))
+        self._test_btn.bind("<Button-1>", lambda e: self._test_hotkey())
+        self._test_btn.bind("<Enter>", lambda e: self._test_btn.config(bg=ACCENT_HOVER))
+        self._test_btn.bind("<Leave>", lambda e: self._test_btn.config(bg=ACCENT))
 
-        self._capturing_hotkey = False
-        self._capture_finalized = False
-        self._captured_keys: set[str] = set()
-        self._key_listener = None
+        self._hotkey_test_label = ttk.Label(
+            scroll_frame, text="", style="Dim.TLabel"
+        )
+        self._hotkey_test_label.pack(anchor="w", padx=24, pady=(0, 10))
 
         # --- Application Section ---
         self._add_section(scroll_frame, "Application")
@@ -295,122 +319,76 @@ class SettingsWindow:
 
         logger.info("Settings window opened")
 
-    def _start_hotkey_capture(self) -> None:
-        """Enter hotkey capture mode - listen for key combination."""
-        if self._capturing_hotkey:
-            return
-        self._capturing_hotkey = True
-        self._captured_keys.clear()
-        self._capture_finalized = False
-        self._hotkey_label.config(text="Press your shortcut...", fg=ACCENT)
-        self._hotkey_btn.config(text="  Cancel  ")
-        self._hotkey_btn.unbind("<Button-1>")
-        self._hotkey_btn.bind("<Button-1>", lambda e: self._cancel_hotkey_capture())
+    def _test_hotkey(self) -> None:
+        """Test whether the selected hotkey preset is detectable."""
+        from pynput import keyboard as kb
+        from src.core.hotkey_manager import _parse_hotkey_keys, _pynput_key_to_id
 
-        # Start pynput listener for key capture
-        self._key_listener = pynput_kb.Listener(
-            on_press=self._on_capture_press,
-            on_release=self._on_capture_release,
+        combo_label = self._hotkey_var.get()
+        combo = _preset_label_to_combo(combo_label)
+        hotkey_keys = _parse_hotkey_keys(combo)
+
+        self._hotkey_test_label.config(
+            text=f"Press {combo_label} now...", foreground=ACCENT
         )
-        self._key_listener.daemon = True
-        self._key_listener.start()
-        logger.info("Hotkey capture started")
+        self._test_btn.config(text=" Testing... ", bg=BTN_CANCEL_BG)
+        self._test_btn.unbind("<Button-1>")
 
-    def _cancel_hotkey_capture(self) -> None:
-        """Cancel hotkey capture and restore previous value."""
-        self._stop_capture()
-        self._hotkey_label.config(text=self._format_hotkey(self._hotkey_value), fg=FG)
-        logger.info("Hotkey capture cancelled")
+        # Pause the app's hotkey listener during test
+        if self._hotkey_manager is not None:
+            self._hotkey_manager.pause()
 
-    def _stop_capture(self) -> None:
-        """Stop the key capture listener."""
-        self._capturing_hotkey = False
-        if self._key_listener is not None:
+        self._test_detected = False
+        self._test_result_shown = False
+        pressed_keys: set[str] = set()
+
+        def on_press(key):
+            key_id = _pynput_key_to_id(key)
+            if not key_id:
+                return
+            pressed_keys.add(key_id)
+            if hotkey_keys.issubset(pressed_keys):
+                self._test_detected = True
+                if self._tk_root:
+                    self._tk_root.after(0, check_result)
+                return False  # Stop listener
+
+        def on_release(key):
+            key_id = _pynput_key_to_id(key)
+            if key_id:
+                pressed_keys.discard(key_id)
+
+        test_listener = kb.Listener(on_press=on_press, on_release=on_release)
+        test_listener.daemon = True
+        test_listener.start()
+        self._active_test_listener = test_listener
+
+        def check_result():
+            if self._test_result_shown or self._window is None:
+                return
+            self._test_result_shown = True
+            self._active_test_listener = None
             try:
-                self._key_listener.stop()
+                test_listener.stop()
             except Exception:
                 pass
-            self._key_listener = None
-        self._hotkey_btn.config(text="  Change  ")
-        self._hotkey_btn.unbind("<Button-1>")
-        self._hotkey_btn.bind("<Button-1>", lambda e: self._start_hotkey_capture())
+            # Resume the app's hotkey listener
+            if self._hotkey_manager is not None:
+                self._hotkey_manager.resume()
+            if self._test_detected:
+                self._hotkey_test_label.config(
+                    text=f"OK - {combo_label} detected!", foreground="#22c55e"
+                )
+            else:
+                self._hotkey_test_label.config(
+                    text="Not detected. Try another hotkey.", foreground="#ef4444"
+                )
+            self._test_btn.config(text="  Test  ", bg=ACCENT)
+            self._test_btn.bind("<Button-1>", lambda e: self._test_hotkey())
 
-    def _on_capture_press(self, key) -> None:
-        """Capture keys as they are pressed."""
-        if self._capture_finalized:
-            return
-        key_id = self._key_to_pynput(key)
-        if not key_id:
-            return
-        self._captured_keys.add(key_id)
-        # Update label to show current combination
+        # Timeout after 5 seconds
         if self._tk_root:
-            display = self._format_hotkey("+".join(sorted(self._captured_keys)))
-            self._tk_root.after(0, lambda d=display: self._hotkey_label.config(text=d, fg=ACCENT))
-
-    def _on_capture_release(self, key) -> None:
-        """When ALL keys are released, finalize the capture if valid."""
-        if not self._capturing_hotkey or self._capture_finalized:
-            return
-
-        key_id = self._key_to_pynput(key)
-        if not key_id:
-            return
-
-        # Only finalize when the non-modifier key is released
-        # (user presses Ctrl+Shift+X, we finalize when X is released)
-        _MODIFIERS = {"<ctrl>", "<shift>", "<alt>", "<cmd>"}
-        if key_id in _MODIFIERS:
-            # A modifier was released -- don't finalize yet unless there's
-            # already a non-modifier captured
-            return
-
-        # Non-modifier released: check if we have a valid combo
-        modifiers = self._captured_keys & _MODIFIERS
-        non_modifiers = self._captured_keys - _MODIFIERS
-        if modifiers and non_modifiers:
-            # Build combo: sorted modifiers + sorted regular keys
-            combo = "+".join(sorted(modifiers) + sorted(non_modifiers))
-            self._hotkey_value = combo
-            self._capture_finalized = True
-            logger.info("Hotkey captured: %s", combo)
-            if self._tk_root:
-                self._tk_root.after(0, self._finalize_hotkey_capture)
-
-    def _finalize_hotkey_capture(self) -> None:
-        """Apply captured hotkey and update UI."""
-        self._stop_capture()
-        display = self._format_hotkey(self._hotkey_value)
-        self._hotkey_label.config(text=display, fg=FG)
-        logger.info("Hotkey set to: %s (%s)", display, self._hotkey_value)
-
-    @staticmethod
-    def _key_to_pynput(key) -> str:
-        """Convert a pynput key to its combo string representation."""
-        if isinstance(key, pynput_kb.Key):
-            name = key.name
-            if name in ("ctrl", "ctrl_l", "ctrl_r"):
-                return "<ctrl>"
-            if name in ("shift", "shift_l", "shift_r"):
-                return "<shift>"
-            if name in ("alt", "alt_l", "alt_r", "alt_gr"):
-                return "<alt>"
-            if name in ("cmd", "cmd_l", "cmd_r"):
-                return "<cmd>"
-            if name == "space":
-                return "<space>"
-            return f"<{name}>"
-        if isinstance(key, pynput_kb.KeyCode):
-            if key.char:
-                return key.char.lower()
-            if key.vk == 32:
-                return "<space>"
-        return ""
-
-    @staticmethod
-    def _format_hotkey(combo: str) -> str:
-        """Format a pynput combo string for display."""
-        return combo.replace("<", "").replace(">", "").replace("+", " + ").title()
+            self._tk_root.after(5000, check_result)
 
     def _on_provider_changed(self) -> None:
         """Enable/disable model dropdown based on selected provider."""
@@ -536,7 +514,8 @@ class SettingsWindow:
                 break
 
         # Hotkey
-        self._settings.hotkey = self._hotkey_value
+        hotkey_label = self._hotkey_var.get()
+        self._settings.hotkey = _preset_label_to_combo(hotkey_label)
 
         # App toggles
         self._settings.show_notifications = self._notif_var.get()
@@ -555,9 +534,15 @@ class SettingsWindow:
     def _on_close(self) -> None:
         """Close the settings window."""
         self._is_open = False
-        # Stop hotkey capture if active
-        if self._capturing_hotkey:
-            self._stop_capture()
+        # Stop any active test listener and resume app hotkey listener
+        if self._active_test_listener is not None:
+            try:
+                self._active_test_listener.stop()
+            except Exception:
+                pass
+            self._active_test_listener = None
+            if self._hotkey_manager is not None:
+                self._hotkey_manager.resume()
         if self._window is not None:
             try:
                 self._window.unbind_all("<MouseWheel>")
@@ -586,3 +571,23 @@ def _code_to_label(code: str, mapping: dict[str, str]) -> str:
         if c == code:
             return label
     return list(mapping.keys())[0]
+
+
+def _combo_to_preset_label(combo: str) -> str:
+    """Find the display label for a hotkey combo, or format it if not a preset."""
+    for code, label in HOTKEY_PRESETS.items():
+        if code == combo:
+            return label
+    # Fallback for legacy/unknown combos
+    return combo.replace("<", "").replace(">", "").replace("+", " + ").title()
+
+
+def _preset_label_to_combo(label: str) -> str:
+    """Reverse lookup: display label -> pynput combo string."""
+    for code, lbl in HOTKEY_PRESETS.items():
+        if lbl == label:
+            return code
+    # Fallback to default
+    if _IS_MAC:
+        return "<cmd>+<shift>+<space>"
+    return "<ctrl>+<shift>+<space>"

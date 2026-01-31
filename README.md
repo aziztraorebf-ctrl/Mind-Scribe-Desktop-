@@ -7,20 +7,26 @@ Inspired by [Wispr Flow](https://wisprflow.ai) and [groq_whisperer](https://gith
 ## Features
 
 ### Core
-- **Global hotkey** (Ctrl+Shift+Space) to toggle recording from anywhere
+- **Configurable global hotkey** with 9 OS-adaptive presets (single keys like F9, combos like Ctrl+Shift+Space, Numpad+)
+- **Toggle and Hold modes** - press to start/stop, or hold to record
 - **Cloud transcription** via Groq API (whisper-large-v3) with OpenAI fallback
+- **LLM post-processing** - optional cleanup of punctuation, fillers, and formatting via Groq/OpenAI chat
 - **Universal text insertion** - pastes transcribed text into any active text field
 - **Audio chunking** for recordings longer than 25MB (Groq API limit)
 - **Clipboard preservation** - restores original clipboard content after pasting
 
 ### UI
 - **Floating overlay** with real-time reactive waveform, recording timer, and control buttons (Pause/Stop/Cancel)
-- **System tray icon** with state indicators (idle/recording/transcribing)
-- **Native notifications** on transcription completion or errors
+- **System tray icon** with state indicators (idle/recording/transcribing), dynamic hotkey display
+- **Settings dashboard** (dark theme) - language, provider, model, microphone, hotkey preset, record mode
+- **Hotkey test button** - verify detection before saving
+- **Native notifications** on transcription completion, errors, or empty recordings
 
 ### Robustness
 - **Provider fallback** - Groq primary, OpenAI secondary
 - **Retry with exponential backoff** (3 attempts per provider)
+- **Audio device fallback** - automatic switch to system default if saved device is unavailable
+- **Hotkey fallback** - reverts to default if configured hotkey fails to start
 - **Thread-safe** state management throughout
 
 ## Architecture
@@ -54,6 +60,7 @@ mindscribe-desktop/
       text_inserter.py        # Clipboard paste simulation
     ui/
       overlay.py              # Floating window (waveform, timer, buttons)
+      settings_window.py      # Settings dashboard (dark theme, hotkey presets)
       tray_icon.py            # System tray with state indicators
       icons.py                # Programmatic tray icons (Pillow)
       notification.py         # Native system notifications
@@ -104,7 +111,7 @@ cp .env.example .env
 python run.py
 ```
 
-Press **Ctrl+Shift+Space** to start recording, press again to stop and transcribe. The text will be pasted into whatever field has focus.
+Press your configured hotkey (default: **Ctrl+Shift+Space**) to start recording, press again to stop and transcribe. The text will be pasted into whatever field has focus. Right-click the tray icon to open Settings and change the hotkey, language, provider, and more.
 
 ## Configuration
 
@@ -117,8 +124,9 @@ Settings are stored in:
 | `language` | `"fr"` | Transcription language (ISO-639-1) |
 | `primary_provider` | `"groq"` | Primary API (`groq` or `openai`) |
 | `whisper_model` | `"whisper-large-v3"` | Whisper model variant |
-| `hotkey` | `Ctrl+Shift+Space` | Global shortcut |
-| `record_mode` | `"toggle"` | `toggle` or `hold` |
+| `hotkey` | `Ctrl+Shift+Space` | Global shortcut (9 presets available) |
+| `record_mode` | `"toggle"` | `toggle` (press to start/stop) or `hold` (hold to record) |
+| `post_process` | `false` | Clean up transcription with LLM (punctuation, fillers) |
 | `show_notifications` | `true` | System notifications |
 | `restore_clipboard` | `true` | Restore clipboard after paste |
 | `prompt` | Contextual hint | Helps Whisper with domain vocabulary |
@@ -133,27 +141,33 @@ python -m pytest tests/ -v
 
 ## Current Status
 
-### Completed (MVP)
-- [x] Audio recording with sounddevice
+### Phase 1-3: Core MVP (complete)
+- [x] Audio recording with sounddevice (with device fallback)
 - [x] Groq/OpenAI transcription with fallback and retry
-- [x] Global hotkey (toggle mode)
+- [x] Global hotkey (toggle and hold modes)
 - [x] Universal text insertion via clipboard
-- [x] System tray with state icons
+- [x] System tray with state icons and dynamic hotkey display
 - [x] Floating overlay with reactive waveform
 - [x] Recording timer (freezes on pause)
 - [x] Overlay control buttons (Pause/Resume, Stop, Cancel)
 - [x] Draggable overlay (preserves position across state changes)
 - [x] 26 unit tests passing
 
-### Planned
-- [ ] Multi-language support (fr/en auto-switch)
-- [ ] Settings UI (customtkinter dashboard)
-- [ ] Hold-to-record mode
-- [ ] Long audio support (ffmpeg MP3 compression)
+### Phase 4: Settings UI (complete)
+- [x] Dark-themed settings dashboard (tkinter)
+- [x] Language, provider, model selection
+- [x] Microphone picker with deduplication and system default
+- [x] LLM post-processing toggle (punctuation cleanup, filler removal)
+- [x] Hotkey preset dropdown (9 OS-adaptive presets) with Test button
+- [x] Toggle/Hold record mode selection
+- [x] Notification and clipboard restore toggles
+
+### Phase 5: Planned
 - [ ] PyInstaller packaging (.exe / .app)
 - [ ] macOS testing and compatibility
 - [ ] Auto-start at boot
-- [ ] Network error handling improvements
+- [ ] Multi-language auto-detection
+- [ ] Network error handling improvements (adaptive retry for rate limits)
 
 ## Tech Decisions
 

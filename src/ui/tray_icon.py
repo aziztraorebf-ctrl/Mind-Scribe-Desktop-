@@ -90,3 +90,20 @@ class TrayIcon:
     def _handle_quit(self, icon, item) -> None:
         if self._on_quit:
             self._on_quit()
+
+    def update_hotkey_display(self, new_display: str) -> None:
+        """Rebuild the tray menu with an updated hotkey display string."""
+        self._hotkey_display = new_display
+        if self._icon is not None:
+            self._icon.menu = pystray.Menu(
+                Item(
+                    f"Toggle Recording ({self._hotkey_display})",
+                    self._handle_toggle,
+                    default=True,
+                ),
+                Item("---", None),
+                Item("Settings", self._handle_settings),
+                Item("---", None),
+                Item("Quit", self._handle_quit),
+            )
+            self._icon.update_menu()
