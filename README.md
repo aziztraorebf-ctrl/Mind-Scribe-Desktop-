@@ -137,7 +137,63 @@ Settings are stored in:
 python -m pytest tests/ -v
 ```
 
-26 tests covering audio recording, transcription, chunking, and settings.
+33 tests covering audio recording, transcription, chunking, settings, and dotenv loading.
+
+## Building from Source (Windows)
+
+### Prerequisites
+
+- Python 3.12+ (tested with 3.14)
+- pip (included with Python)
+
+### Steps
+
+1. Clone the repo:
+   ```bash
+   git clone https://github.com/aziztraorebf-ctrl/Mind-Scribe-Desktop-.git
+   cd Mind-Scribe-Desktop-
+   ```
+
+2. Create a virtual environment:
+   ```bash
+   python -m venv venv
+   ```
+
+3. Activate the virtual environment:
+   ```bash
+   .\venv\Scripts\activate
+   ```
+
+4. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+5. Build the executable:
+   ```bash
+   .\build.ps1
+   ```
+   Or manually:
+   ```bash
+   python -m PyInstaller MindScribe.spec --clean -y
+   ```
+
+6. Copy your `.env` file to `dist\MindScribe\` with your API keys (`GROQ_API_KEY` and/or `OPENAI_API_KEY`).
+
+7. Run the application:
+   ```bash
+   dist\MindScribe\MindScribe.exe
+   ```
+
+### Windows Defender Note
+
+Unsigned PyInstaller executables may be flagged by Windows Defender. To prevent this, add `dist\MindScribe\` to your exclusions:
+
+Windows Security > Virus & threat protection > Manage settings > Exclusions > Add folder
+
+### Distribution
+
+The `dist\MindScribe\` folder is self-contained and can be copied or zipped for distribution. Users need to place their own `.env` file next to `MindScribe.exe`.
 
 ## Current Status
 
