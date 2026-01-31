@@ -88,6 +88,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,  # Disable UPX - avoids false antivirus positives
+    icon='assets/mindscribe.ico',
     console=False,  # No console window (GUI app)
     disable_windowed_traceback=False,
     argv_emulation=False,
