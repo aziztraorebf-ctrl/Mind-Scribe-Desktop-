@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import (
 logger = logging.getLogger(__name__)
 
 # OS-adaptive UI fonts
-_UI_FONT = "SF Pro Display" if platform.system() == "Darwin" else "Segoe UI"
+_UI_FONT = ".AppleSystemUIFont" if platform.system() == "Darwin" else "Segoe UI"
 _MONO_FONT = "SF Mono" if platform.system() == "Darwin" else "Consolas"
 
 # Overlay dimensions

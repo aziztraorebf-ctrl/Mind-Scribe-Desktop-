@@ -126,16 +126,8 @@ def _check_pynput() -> list[str]:
 
 
 def _check_pystray() -> list[str]:
-    """Check that pystray is importable (needed for system tray icon)."""
-    warnings = []
-    try:
-        import pystray  # noqa: F401
-    except ImportError:
-        warnings.append(
-            "pystray is not installed (needed for system tray icon).\n"
-            "  Fix: pip install pystray"
-        )
-    return warnings
+    """No longer needed — tray icon now uses PyQt6 QSystemTrayIcon."""
+    return []
 
 
 def _check_env_file() -> list[str]:

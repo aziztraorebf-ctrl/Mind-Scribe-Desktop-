@@ -14,13 +14,13 @@ openai>=1.0.0
 # System Integration
 pynput>=1.7.6
 pyperclip>=1.8.2
-pystray>=0.19.4
+# pystray removed — tray icon now uses PyQt6 QSystemTrayIcon
 Pillow>=10.0.0
 
 # UI - PyQt6 (replaces tkinter for macOS compatibility)
 PyQt6>=6.6.0
 
-# macOS native frameworks (required by pystray and pynput on macOS)
+# macOS native frameworks (required by pynput on macOS)
 pyobjc-framework-Cocoa>=10.0
 pyobjc-framework-Quartz>=10.0
 

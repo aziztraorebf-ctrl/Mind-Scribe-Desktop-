@@ -29,7 +29,7 @@ a = Analysis(
         'plyer.platforms.macosx.notification',
         'pynput.keyboard._darwin',
         'pynput.mouse._darwin',
-        'pystray._darwin',
+        # pystray no longer used (replaced by QSystemTrayIcon)
         # PyQt6
         'PyQt6.QtCore',
         'PyQt6.QtWidgets',

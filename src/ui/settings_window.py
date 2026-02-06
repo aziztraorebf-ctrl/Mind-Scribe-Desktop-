@@ -30,8 +30,8 @@ from src.core.audio_recorder import AudioRecorder
 logger = logging.getLogger(__name__)
 
 # OS-adaptive UI font
-_UI_FONT = "SF Pro Display" if platform.system() == "Darwin" else "Segoe UI"
-_MONO_FONT = "SF Mono" if platform.system() == "Darwin" else "Consolas"
+_UI_FONT = ".AppleSystemUIFont" if platform.system() == "Darwin" else "Segoe UI"
+_MONO_FONT = "Menlo" if platform.system() == "Darwin" else "Consolas"
 
 # Language options: display label -> ISO-639-1 code
 LANGUAGE_OPTIONS = {
