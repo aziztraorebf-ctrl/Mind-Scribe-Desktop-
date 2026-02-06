@@ -59,7 +59,20 @@ write_warning() {
 }
 
 # --------------------------------------------------------------------------
-# Step 0: Deactivate conda if active (prevents venv isolation issues)
+# Step 0a: Deactivate any active Python venv (so we find the real Python)
+# --------------------------------------------------------------------------
+if [ -n "${VIRTUAL_ENV:-}" ]; then
+    write_warning "A Python venv is already active: ${VIRTUAL_ENV}"
+    write_warning "Deactivating it so setup uses the system Python."
+    deactivate 2>/dev/null || true
+    # Remove the venv's bin from PATH as a fallback
+    export PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "${VENV_DIR}/bin" | tr '\n' ':' | sed 's/:$//')
+    write_success "Previous venv deactivated."
+    echo ""
+fi
+
+# --------------------------------------------------------------------------
+# Step 0b: Deactivate conda if active (prevents venv isolation issues)
 # --------------------------------------------------------------------------
 if [ -n "${CONDA_DEFAULT_ENV:-}" ]; then
     write_warning "conda environment '${CONDA_DEFAULT_ENV}' is active."
@@ -149,6 +162,15 @@ write_step "Checking Python version"
 PYTHON_CMD=""
 for candidate in python3.13 python3.12 python3.11 python3; do
     if command -v "${candidate}" &> /dev/null; then
+        # Resolve to the real binary path (not a symlink inside a venv)
+        RESOLVED="$(command -v "${candidate}")"
+        if [ -L "${RESOLVED}" ]; then
+            RESOLVED="$(readlink -f "${RESOLVED}" 2>/dev/null || python3 -c "import os,sys; print(os.path.realpath(sys.executable))" 2>/dev/null)"
+        fi
+        # Skip if it lives inside the venv we are about to delete
+        case "${RESOLVED}" in
+            "${VENV_DIR}/"*) continue ;;
+        esac
         PYTHON_CMD="${candidate}"
         break
     fi
