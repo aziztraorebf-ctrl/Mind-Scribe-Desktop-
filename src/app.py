@@ -73,15 +73,15 @@ class MindScribeApp:
             hotkey_display=self.hotkey_manager.hotkey_display,
         )
 
-        # Settings window
+        # Floating overlay (QWidget — must be created before settings window)
+        self.overlay = RecordingOverlay()
+
+        # Settings window (QWidget — independent top-level window)
         self.settings_window = SettingsWindow(
             settings=self.settings,
             on_save=self._on_settings_saved,
         )
         self.settings_window.set_hotkey_manager(self.hotkey_manager)
-
-        # Floating overlay
-        self.overlay = RecordingOverlay()
 
         # Connect overlay to audio recorder for real-time levels
         self.overlay.set_audio_source(
@@ -115,10 +115,6 @@ class MindScribeApp:
         self.hotkey_manager.start()
         self.tray.start()
         self.overlay.start()
-
-        # Share the overlay's tk root with the settings window
-        if self.overlay.tk_root is not None:
-            self.settings_window.set_tk_root(self.overlay.tk_root)
 
         # Show brief "Ready" overlay so the user knows the app is running
         self.overlay.show_ready(self.hotkey_manager.hotkey_display)
