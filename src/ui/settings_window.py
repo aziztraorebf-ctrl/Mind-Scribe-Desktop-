@@ -197,7 +197,6 @@ class SettingsWindow(QWidget):
         self._clipboard_cb: QCheckBox | None = None
 
         self._sig_open.connect(self._build_window)
-        self._sig_update_devices = pyqtSignal()  # unused placeholder
 
     @property
     def is_open(self) -> bool:

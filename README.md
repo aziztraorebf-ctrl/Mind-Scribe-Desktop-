@@ -60,6 +60,8 @@ You **must** grant these in **System Settings > Privacy & Security**:
 
 Without Accessibility + Input Monitoring, global hotkeys will not work.
 
+**Shortcut conflict**: If `Cmd+Shift+Space` doesn't work, check **System Settings > Keyboard > Keyboard Shortcuts > Input Sources**. macOS may have it assigned to "Select the previous input source". Disable it there, or choose a different hotkey in MindScribe settings (F9, Cmd+Shift+R, etc.).
+
 ## Configuration
 
 Settings are stored in `~/Library/Application Support/MindScribeDesktop/config.json`.

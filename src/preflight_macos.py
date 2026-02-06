@@ -12,7 +12,6 @@ Usage:
 """
 
 import logging
-import os
 import platform
 import shutil
 import sys
@@ -99,6 +98,45 @@ def _check_pyobjc() -> list[str]:
     return warnings
 
 
+def _check_pillow() -> list[str]:
+    """Check that Pillow is importable (needed for tray icons)."""
+    warnings = []
+    try:
+        from PIL import Image, ImageDraw  # noqa: F401
+    except ImportError:
+        warnings.append(
+            "Pillow is not installed (needed for tray icon generation).\n"
+            "  Fix: pip install Pillow"
+        )
+    return warnings
+
+
+def _check_pynput() -> list[str]:
+    """Check that pynput is importable (needed for global hotkeys)."""
+    warnings = []
+    try:
+        from pynput import keyboard  # noqa: F401
+    except ImportError:
+        warnings.append(
+            "pynput is not installed (needed for global hotkeys).\n"
+            "  Fix: pip install pynput"
+        )
+    return warnings
+
+
+def _check_pystray() -> list[str]:
+    """Check that pystray is importable (needed for system tray icon)."""
+    warnings = []
+    try:
+        import pystray  # noqa: F401
+    except ImportError:
+        warnings.append(
+            "pystray is not installed (needed for system tray icon).\n"
+            "  Fix: pip install pystray"
+        )
+    return warnings
+
+
 def _check_env_file() -> list[str]:
     """Check that a .env file exists in one of the expected locations."""
     warnings = []
@@ -131,6 +169,9 @@ def run_preflight_checks() -> list[str]:
     warnings.extend(_check_ffmpeg())
     warnings.extend(_check_pyqt6())
     warnings.extend(_check_pyobjc())
+    warnings.extend(_check_pillow())
+    warnings.extend(_check_pynput())
+    warnings.extend(_check_pystray())
     warnings.extend(_check_env_file())
 
     if warnings:
