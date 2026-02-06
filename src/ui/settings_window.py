@@ -167,6 +167,7 @@ class SettingsWindow(QWidget):
     """
 
     _sig_open = pyqtSignal()
+    _sig_raise = pyqtSignal()
 
     def __init__(
         self,
@@ -197,6 +198,7 @@ class SettingsWindow(QWidget):
         self._clipboard_cb: QCheckBox | None = None
 
         self._sig_open.connect(self._build_window)
+        self._sig_raise.connect(self._raise_window)
 
     @property
     def is_open(self) -> bool:
@@ -209,10 +211,14 @@ class SettingsWindow(QWidget):
     def open(self) -> None:
         """Open the settings window (thread-safe)."""
         if self._is_open:
-            self.raise_()
-            self.activateWindow()
+            self._sig_raise.emit()
             return
         self._sig_open.emit()
+
+    def _raise_window(self) -> None:
+        """Bring the existing settings window to front (runs on Qt thread)."""
+        self.raise_()
+        self.activateWindow()
 
     # ------------------------------------------------------------------
     # Window construction (runs on Qt main thread)

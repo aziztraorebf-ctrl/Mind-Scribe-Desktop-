@@ -3,8 +3,8 @@
 # MindScribe Desktop - PyInstaller Build Script (macOS)
 # ============================================================================
 # Usage:
-#   chmod +x build-mac.sh
-#   ./build-mac.sh
+#   chmod +x build.sh
+#   ./build.sh
 #
 # This script automates the PyInstaller build process for MindScribe Desktop
 # on macOS using the PyQt6-based spec file. It performs the following steps:
@@ -13,7 +13,7 @@
 #   3. Verifies that PyInstaller is installed in the venv
 #   4. Kills any running MindScribe processes
 #   5. Cleans the dist/MindScribe output folder
-#   6. Runs PyInstaller with the MindScribe-mac.spec file
+#   6. Runs PyInstaller with the MindScribe.spec file
 #   7. Verifies the .app bundle was created
 #   8. Copies .env into the .app bundle's Resources directory
 #   9. Prints a build summary
@@ -84,7 +84,7 @@ if [ ! -f "${VENV_PYTHON}" ]; then
     write_error "Virtual environment not found at: ${VENV_PYTHON}"
     write_error "Please run setup_macos.sh first, or create the venv manually:"
     write_error "  python3 -m venv venv-mac && source venv-mac/bin/activate"
-    write_error "  pip install -r requirements-mac.txt"
+    write_error "  pip install -r requirements.txt"
     exit 1
 fi
 
@@ -146,32 +146,15 @@ write_step "Running PyInstaller build"
 # Temporarily disable set -e so we can capture the build result
 set +e
 
-BUILD_SUCCESS=false
 cd "${PROJECT_ROOT}"
 
-"${VENV_PYTHON}" -m PyInstaller "${SPEC_FILE}" --clean -y 2>&1 | while IFS= read -r line; do
-    echo "${line}"
-    if echo "${line}" | grep -q "Build complete!"; then
-        touch "${PROJECT_ROOT}/.build_success_marker"
-    fi
-done
-
-PYINSTALLER_EXIT_CODE=${PIPESTATUS[0]}
+"${VENV_PYTHON}" -m PyInstaller "${SPEC_FILE}" --clean -y
+PYINSTALLER_EXIT_CODE=$?
 
 set -e
 
-if [ -f "${PROJECT_ROOT}/.build_success_marker" ]; then
-    rm -f "${PROJECT_ROOT}/.build_success_marker"
-    BUILD_SUCCESS=true
-fi
-
 if [ "${PYINSTALLER_EXIT_CODE}" -ne 0 ]; then
     write_error "PyInstaller build failed with exit code ${PYINSTALLER_EXIT_CODE}."
-    exit 1
-fi
-
-if [ "${BUILD_SUCCESS}" != "true" ]; then
-    write_error "PyInstaller did not report 'Build complete!'"
     exit 1
 fi
 
