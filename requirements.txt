@@ -4,7 +4,7 @@
 # Audio
 sounddevice>=0.4.6
 pydub>=0.25.1
-audioop-lts>=0.2.2  # Required for pydub on Python 3.13+
+audioop-lts>=0.2.2; python_version >= "3.13"  # Only needed on Python 3.13+ (audioop was removed)
 numpy>=1.26.0
 
 # API Clients
