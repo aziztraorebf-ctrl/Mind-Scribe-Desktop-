@@ -2,7 +2,7 @@
 """PyInstaller spec file for MindScribe Desktop (macOS / PyQt6).
 
 Build command:
-    pyinstaller MindScribe-mac.spec --clean
+    pyinstaller MindScribe.spec --clean
 
 Output:
     dist/MindScribe.app

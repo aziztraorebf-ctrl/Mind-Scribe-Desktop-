@@ -40,16 +40,23 @@ def insert_text(
     # Copy transcription to clipboard
     pyperclip.copy(text)
 
-    # Small delay to ensure clipboard is updated
-    time.sleep(0.05)
+    # Delay to ensure clipboard is synced before pasting
+    # macOS needs longer due to pasteboard daemon latency
+    if platform.system() == "Darwin":
+        time.sleep(0.15)
+    else:
+        time.sleep(0.05)
 
     # Simulate paste
     _paste()
 
     # Restore clipboard in background
     if restore_clipboard and original_clipboard:
+        # macOS pasteboard needs more time before safe to restore
+        actual_delay = max(restore_delay, 1.0) if platform.system() == "Darwin" else restore_delay
+
         def _restore():
-            time.sleep(restore_delay)
+            time.sleep(actual_delay)
             try:
                 pyperclip.copy(original_clipboard)
             except Exception:

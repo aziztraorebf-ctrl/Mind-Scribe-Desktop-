@@ -143,6 +143,7 @@ class RecordingOverlay(QWidget):
     _sig_show = pyqtSignal(str)
     _sig_hide = pyqtSignal()
     _sig_show_ready = pyqtSignal(str)
+    _sig_stop = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -261,6 +262,7 @@ class RecordingOverlay(QWidget):
         self._sig_show.connect(self._show_window)
         self._sig_hide.connect(self._hide_window)
         self._sig_show_ready.connect(self._show_ready_window)
+        self._sig_stop.connect(self._stop_impl)
 
     def _setup_animation(self) -> None:
         self._anim_timer = QTimer(self)
@@ -284,7 +286,11 @@ class RecordingOverlay(QWidget):
         logger.info("Recording overlay initialized")
 
     def stop(self) -> None:
-        """Destroy the overlay."""
+        """Destroy the overlay (thread-safe)."""
+        self._sig_stop.emit()
+
+    def _stop_impl(self) -> None:
+        """Actual stop — runs on Qt main thread."""
         self._anim_timer.stop()
         self.close()
 

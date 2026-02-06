@@ -12,12 +12,11 @@
 #   2. Checks / installs Homebrew
 #   3. Installs portaudio and ffmpeg via Homebrew
 #   4. Verifies Python 3.11+ is available
-#   5. Checks that tkinter is available (optional, warns if missing)
-#   6. Creates and activates a virtual environment (venv-mac)
-#   7. Installs macOS-specific Python dependencies
-#   8. Verifies critical imports
-#   9. Copies .env.example to .env if .env doesn't exist
-#  10. Prints success message with next steps
+#   5. Creates and activates a virtual environment (venv-mac)
+#   6. Installs macOS-specific Python dependencies
+#   7. Verifies critical imports
+#   8. Copies .env.example to .env if .env doesn't exist
+#   9. Prints success message with next steps
 #
 # Exit codes:
 #   0 - Setup completed successfully
@@ -39,7 +38,7 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${PROJECT_ROOT}/venv-mac"
 VENV_PYTHON="${VENV_DIR}/bin/python"
 VENV_PIP="${VENV_DIR}/bin/pip"
-REQUIREMENTS="${PROJECT_ROOT}/requirements-mac.txt"
+REQUIREMENTS="${PROJECT_ROOT}/requirements.txt"
 
 # --- Helper functions ---
 write_step() {
@@ -149,21 +148,7 @@ fi
 write_success "Python ${PYTHON_VERSION} found (${PYTHON_CMD})"
 
 # --------------------------------------------------------------------------
-# Step 5: Check tkinter availability (optional, warn only)
-# --------------------------------------------------------------------------
-write_step "Checking tkinter availability"
-
-if "${PYTHON_CMD}" -c "import tkinter" 2>/dev/null; then
-    write_success "tkinter is available."
-else
-    write_warning "tkinter is not available."
-    write_warning "Some legacy components may require it. To install:"
-    write_warning "  brew install python-tk@${PYTHON_VERSION}"
-    echo -e "${YELLOW}  (This is optional - the macOS build uses PyQt6 instead.)${NC}"
-fi
-
-# --------------------------------------------------------------------------
-# Step 6: Create virtual environment
+# Step 5: Create virtual environment
 # --------------------------------------------------------------------------
 write_step "Setting up virtual environment"
 
@@ -191,7 +176,7 @@ source "${VENV_DIR}/bin/activate"
 write_success "Virtual environment activated."
 
 # --------------------------------------------------------------------------
-# Step 7: Install Python dependencies
+# Step 6: Install Python dependencies
 # --------------------------------------------------------------------------
 write_step "Installing Python dependencies"
 
@@ -205,7 +190,7 @@ fi
 write_success "All Python dependencies installed."
 
 # --------------------------------------------------------------------------
-# Step 8: Verify critical imports
+# Step 7: Verify critical imports
 # --------------------------------------------------------------------------
 write_step "Verifying critical imports"
 
@@ -226,7 +211,7 @@ if [ "${IMPORT_ERRORS}" -gt 0 ]; then
 fi
 
 # --------------------------------------------------------------------------
-# Step 9: Copy .env.example to .env if needed
+# Step 8: Copy .env.example to .env if needed
 # --------------------------------------------------------------------------
 write_step "Checking .env file"
 
@@ -241,7 +226,7 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# Step 10: Success!
+# Step 9: Success!
 # --------------------------------------------------------------------------
 write_step "Setup Complete"
 
@@ -266,7 +251,7 @@ echo -e "     ${WHITE}source ${VENV_DIR}/bin/activate${NC}"
 echo -e "     ${WHITE}python run.py${NC}"
 echo ""
 echo -e "  ${CYAN}5.${NC} To build a standalone .app bundle:"
-echo -e "     ${WHITE}./build-mac.sh${NC}"
+echo -e "     ${WHITE}./build.sh${NC}"
 echo ""
 
 exit 0
