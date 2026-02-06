@@ -24,13 +24,42 @@ def main():
     if platform.system() == "Darwin":
         try:
             from src.preflight_macos import run_preflight_checks
-            warnings = run_preflight_checks()
+            warnings, critical = run_preflight_checks()
             for w in warnings:
                 print(f"  WARNING: {w}", file=sys.stderr)
+            if critical:
+                print(
+                    "\n"
+                    "=" * 60 + "\n"
+                    "  CRITICAL: Missing required dependencies.\n"
+                    "  MindScribe cannot start.\n"
+                    "=" * 60 + "\n"
+                    "\n"
+                    "  To fix, run the following command inside your venv:\n"
+                    "\n"
+                    "    pip install -r requirements.txt\n"
+                    "\n"
+                    "  Or re-run the setup script:\n"
+                    "\n"
+                    "    ./setup_macos.sh\n",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
         except ImportError:
             pass
 
-    from PyQt6.QtWidgets import QApplication
+    try:
+        from PyQt6.QtWidgets import QApplication
+    except ImportError:
+        print(
+            "\n"
+            "ERROR: PyQt6 is not installed.\n"
+            "  Fix: pip install PyQt6\n"
+            "  Or re-run: ./setup_macos.sh\n",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     from src.app import MindScribeApp
 
     # QApplication must be created on the main thread (macOS requirement)

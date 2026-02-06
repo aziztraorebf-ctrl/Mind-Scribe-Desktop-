@@ -12,6 +12,7 @@ Usage:
 """
 
 import logging
+import os
 import platform
 import shutil
 import sys
@@ -152,18 +153,41 @@ def _check_env_file() -> list[str]:
     return warnings
 
 
-def run_preflight_checks() -> list[str]:
+def _check_conda_interference() -> list[str]:
+    """Warn if conda base environment is active alongside a venv."""
+    warnings = []
+    conda_prefix = os.environ.get("CONDA_DEFAULT_ENV", "")
+    virtual_env = os.environ.get("VIRTUAL_ENV", "")
+    if conda_prefix and virtual_env:
+        warnings.append(
+            f"conda environment '{conda_prefix}' is active alongside your venv.\n"
+            "  This can prevent packages from being found.\n"
+            "  Fix: run 'conda deactivate' before activating your venv:\n"
+            "    conda deactivate\n"
+            "    source venv-mac/bin/activate\n"
+            "    python run.py"
+        )
+    return warnings
+
+
+def run_preflight_checks() -> tuple[list[str], bool]:
     """Run all macOS preflight checks.
 
-    Returns a list of warning strings. An empty list means all checks passed.
-    Silently returns an empty list if not running on macOS.
+    Returns:
+        A tuple of (warnings, has_critical). ``warnings`` is a list of
+        human-readable warning strings; ``has_critical`` is True when at
+        least one *required* dependency (PyQt6) is missing and the app
+        cannot start.
     """
     if platform.system() != "Darwin":
-        return []
+        return [], False
 
     logger.info("Running macOS preflight checks...")
 
     warnings: list[str] = []
+
+    # Conda interference check (common cause of "empty venv" symptoms)
+    warnings.extend(_check_conda_interference())
 
     warnings.extend(_check_portaudio())
     warnings.extend(_check_ffmpeg())
@@ -174,6 +198,13 @@ def run_preflight_checks() -> list[str]:
     warnings.extend(_check_pystray())
     warnings.extend(_check_env_file())
 
+    # Determine if any critical (blocking) dependency is missing
+    has_critical = False
+    try:
+        import PyQt6  # noqa: F401
+    except ImportError:
+        has_critical = True
+
     if warnings:
         logger.warning(
             "macOS preflight checks found %d issue(s):", len(warnings)
@@ -183,4 +214,4 @@ def run_preflight_checks() -> list[str]:
     else:
         logger.info("All macOS preflight checks passed.")
 
-    return warnings
+    return warnings, has_critical

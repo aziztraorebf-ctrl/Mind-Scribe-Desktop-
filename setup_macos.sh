@@ -59,6 +59,31 @@ write_warning() {
 }
 
 # --------------------------------------------------------------------------
+# Step 0: Deactivate conda if active (prevents venv isolation issues)
+# --------------------------------------------------------------------------
+if [ -n "${CONDA_DEFAULT_ENV:-}" ]; then
+    write_warning "conda environment '${CONDA_DEFAULT_ENV}' is active."
+    write_warning "conda can interfere with Python venvs and cause missing-package errors."
+    echo ""
+    echo -e "${YELLOW}Attempting to deactivate conda...${NC}"
+    # conda deactivate may not be available as a function in subshells,
+    # so we also unset the key environment variables as a fallback.
+    if type conda &> /dev/null; then
+        conda deactivate 2>/dev/null || true
+    fi
+    # If conda is still present after deactivate, strip it from PATH
+    if [ -n "${CONDA_DEFAULT_ENV:-}" ]; then
+        unset CONDA_DEFAULT_ENV
+        unset CONDA_PREFIX
+        # Remove conda paths from PATH
+        export PATH=$(echo "$PATH" | tr ':' '\n' | grep -v conda | tr '\n' ':' | sed 's/:$//')
+        write_warning "Stripped conda from PATH for the duration of this script."
+    fi
+    write_success "conda deactivated."
+    echo ""
+fi
+
+# --------------------------------------------------------------------------
 # Step 1: Check that we are on macOS
 # --------------------------------------------------------------------------
 write_step "Checking platform"
