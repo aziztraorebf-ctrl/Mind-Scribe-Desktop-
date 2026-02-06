@@ -1,309 +1,139 @@
-# MindScribe Desktop
+# MindScribe Desktop (macOS)
 
-Native voice dictation application for Windows and macOS. Record speech via a global hotkey, transcribe it using Groq or OpenAI Whisper, and paste the text into any active field (browser, code editor, terminal, etc.).
+Voice dictation app for macOS. Record speech via a global hotkey, transcribe it using Groq or OpenAI Whisper, and paste the text into any active field.
 
-Inspired by [Wispr Flow](https://wisprflow.ai) and [groq_whisperer](https://github.com/KennyVaneetvelde/groq_whisperer).
+> This is the macOS version (PyQt6). The Windows version (tkinter) lives at [Mind-Scribe-Desktop-](https://github.com/aziztraorebf-ctrl/Mind-Scribe-Desktop-).
 
 ## Features
 
-### Core
-- **Configurable global hotkey** with 7 OS-adaptive presets (single keys like F9, combos like Ctrl+Shift+Space)
-- **Toggle and Hold modes** - press to start/stop, or hold to record
+- **Global hotkey** (Cmd+Shift+Space) — toggle or hold-to-record modes
 - **Cloud transcription** via Groq API (whisper-large-v3) with OpenAI fallback
-- **LLM post-processing** - optional cleanup of punctuation, fillers, and formatting via Groq/OpenAI chat
-- **Universal text insertion** - pastes transcribed text into any active text field
-- **Audio chunking** for recordings longer than 25MB (Groq API limit)
-- **Clipboard preservation** - restores original clipboard content after pasting
+- **Floating overlay** with real-time waveform, timer, Pause/Stop/Cancel buttons
+- **System tray icon** with state indicators and settings menu
+- **Settings dashboard** — language, provider, model, microphone, hotkey, record mode
+- **LLM post-processing** — optional cleanup of punctuation and fillers
+- **Universal paste** into any active text field (browser, editor, terminal)
 
-### UI
-- **Floating overlay** with real-time reactive waveform, recording timer, and control buttons (Pause/Stop/Cancel)
-- **System tray icon** with state indicators (idle/recording/transcribing), dynamic hotkey display
-- **Settings dashboard** (dark theme) - language, provider, model, microphone, hotkey preset, record mode
-- **Hotkey test button** - verify detection before saving
-- **Native notifications** on transcription completion, errors, or empty recordings
+## Quick Start
 
-### Robustness
-- **Provider fallback** - Groq primary, OpenAI secondary
-- **Retry with exponential backoff** (3 attempts per provider)
-- **Audio device fallback** - automatic switch to system default if saved device is unavailable
-- **Hotkey fallback** - reverts to default if configured hotkey fails to start
-- **Thread-safe** state management throughout
+```bash
+# Clone
+git clone https://github.com/aziztraorebf-ctrl/Mind-Scribe-Mac.git
+cd Mind-Scribe-Mac
+
+# Automated setup (installs Homebrew deps, creates venv, installs packages)
+chmod +x setup_macos.sh
+./setup_macos.sh
+
+# Configure API keys
+cp .env.example .env
+# Edit .env → add GROQ_API_KEY and/or OPENAI_API_KEY
+
+# Run
+source venv-mac/bin/activate
+python run.py
+```
+
+## Requirements
+
+- macOS 12.0+ (Apple Silicon or Intel)
+- Python 3.11+
+- Xcode Command Line Tools (`xcode-select --install`)
+- Groq API key and/or OpenAI API key
+
+### System dependencies (installed by `setup_macos.sh`)
+
+| Dependency | Purpose | Install |
+|-----------|---------|---------|
+| portaudio | Microphone capture | `brew install portaudio` |
+| ffmpeg | Audio compression | `brew install ffmpeg` |
+
+## macOS Permissions
+
+You **must** grant these in **System Settings > Privacy & Security**:
+
+| Permission | Why | Where to add |
+|-----------|-----|-------------|
+| **Microphone** | Record your voice | Microphone → Terminal / MindScribe |
+| **Accessibility** | Global hotkeys | Accessibility → Terminal / MindScribe |
+| **Input Monitoring** | Detect key presses | Input Monitoring → Terminal / MindScribe |
+
+Without Accessibility + Input Monitoring, global hotkeys will not work.
+
+## Configuration
+
+Settings are stored in `~/Library/Application Support/MindScribeDesktop/config.json`.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `language` | `"fr"` | Transcription language (ISO-639-1) |
+| `primary_provider` | `"groq"` | `groq` or `openai` |
+| `whisper_model` | `"whisper-large-v3"` | Whisper model variant |
+| `hotkey` | `Cmd+Shift+Space` | Global shortcut (7 presets) |
+| `record_mode` | `"toggle"` | `toggle` or `hold` |
+| `post_process` | `false` | LLM cleanup (punctuation, fillers) |
+
+## Building the .app bundle
+
+```bash
+# Install PyInstaller
+pip install pyinstaller
+
+# Build
+chmod +x build.sh
+./build.sh
+```
+
+Output: `dist/MindScribe.app` — double-click or `open dist/MindScribe.app`.
 
 ## Architecture
 
 ```
-Python 3.11+ (tested on 3.14)
-  + sounddevice     (audio recording)
-  + Groq API        (whisper-large-v3 transcription)
-  + OpenAI API      (Whisper fallback)
-  + pynput          (global hotkeys, cross-platform)
-  + pyperclip       (clipboard management)
-  + pystray         (system tray icon)
-  + tkinter         (floating overlay)
+Python 3.11+ (PyQt6)
+  + sounddevice     (microphone capture via PortAudio)
+  + PyQt6           (overlay + settings UI)
+  + Groq/OpenAI API (Whisper transcription)
+  + pynput          (global hotkeys via PyObjC/Quartz)
+  + pystray         (system tray via PyObjC/Cocoa)
   + pydub           (audio chunking/compression)
 ```
 
 ## Project Structure
 
 ```
-mindscribe-desktop/
-  src/
-    app.py                    # Main orchestration & state machine
-    config/
-      settings.py             # Dataclass config with JSON persistence
-      dotenv_loader.py        # .env file loading
-    core/
-      audio_recorder.py       # Mic capture with real-time RMS levels
-      transcriber.py          # Groq/OpenAI client with fallback + retry
-      chunker.py              # Audio splitting for long recordings
-      hotkey_manager.py       # Global keyboard shortcuts (pynput)
-      text_inserter.py        # Clipboard paste simulation
-    ui/
-      overlay.py              # Floating window (waveform, timer, buttons)
-      settings_window.py      # Settings dashboard (dark theme, hotkey presets)
-      tray_icon.py            # System tray with state indicators
-      icons.py                # Programmatic tray icons (Pillow)
-      notification.py         # Native system notifications
-  tests/
-    test_audio_recorder.py    # 7 tests
-    test_transcriber.py       # 7 tests
-    test_chunker.py           # 12 tests (includes settings)
-    conftest.py               # Shared fixtures
-  run.py                      # Launcher script
-  .env.example                # API key template
-  requirements.txt
+src/
+  app.py                    # Orchestration & state machine
+  preflight_macos.py        # Runtime dependency checker
+  config/
+    settings.py             # JSON config persistence
+    dotenv_loader.py        # .env file loading
+  core/
+    audio_recorder.py       # Mic capture with real-time RMS
+    transcriber.py          # Groq/OpenAI with fallback + retry
+    chunker.py              # Audio splitting for long recordings
+    hotkey_manager.py       # Global keyboard shortcuts (pynput)
+    text_inserter.py        # Clipboard paste simulation (Cmd+V)
+  ui/
+    overlay.py              # Floating overlay (PyQt6, waveform, timer)
+    settings_window.py      # Settings dashboard (PyQt6, dark theme)
+    tray_icon.py            # System tray with state indicators
+    icons.py                # Programmatic tray icons (Pillow)
+    notification.py         # Native macOS notifications (osascript)
+run.py                      # Launcher (QApplication on main thread)
+requirements.txt            # Python dependencies
+MindScribe.spec             # PyInstaller spec (.app bundle)
+setup_macos.sh              # Automated setup script
+build.sh                    # Build script for .app bundle
+macos/
+  Info.plist                # App bundle metadata + permissions
+  entitlements.plist        # Entitlements (audio, apple-events)
 ```
-
-## Setup
-
-### Prerequisites
-- Python 3.11+ (tested on 3.14)
-- A microphone
-- Groq API key and/or OpenAI API key
-
-### Installation
-
-```bash
-# Clone the repo
-git clone https://github.com/aziztraorebf-ctrl/Mind-Scribe-Desktop-.git
-cd Mind-Scribe-Desktop-
-
-# Create virtual environment
-python -m venv venv
-
-# Activate (Windows)
-venv\Scripts\activate
-
-# Activate (macOS/Linux)
-source venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Configure API keys
-cp .env.example .env
-# Edit .env and add your Groq and/or OpenAI API keys
-```
-
-### Run
-
-```bash
-python run.py
-```
-
-Press your configured hotkey (default: **Ctrl+Shift+Space**) to start recording, press again to stop and transcribe. The text will be pasted into whatever field has focus. Right-click the tray icon to open Settings and change the hotkey, language, provider, and more.
-
-## Configuration
-
-Settings are stored in:
-- **Windows**: `%LOCALAPPDATA%\MindScribeDesktop\config.json`
-- **macOS**: `~/Library/Application Support/MindScribeDesktop/config.json`
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `language` | `"fr"` | Transcription language (ISO-639-1) |
-| `primary_provider` | `"groq"` | Primary API (`groq` or `openai`) |
-| `whisper_model` | `"whisper-large-v3"` | Whisper model variant |
-| `hotkey` | `Ctrl+Shift+Space` / `Cmd+Shift+Space` | Global shortcut (7 presets available) |
-| `record_mode` | `"toggle"` | `toggle` (press to start/stop) or `hold` (hold to record) |
-| `post_process` | `false` | Clean up transcription with LLM (punctuation, fillers) |
-| `show_notifications` | `true` | System notifications |
-| `restore_clipboard` | `true` | Restore clipboard after paste |
-| `prompt` | Contextual hint | Helps Whisper with domain vocabulary |
 
 ## Tests
 
 ```bash
 python -m pytest tests/ -v
 ```
-
-33 tests covering audio recording, transcription, chunking, settings, and dotenv loading.
-
-## Building from Source (Windows)
-
-### Prerequisites
-
-- Python 3.12+ (tested with 3.14)
-- pip (included with Python)
-
-### Steps
-
-1. Clone the repo:
-   ```bash
-   git clone https://github.com/aziztraorebf-ctrl/Mind-Scribe-Desktop-.git
-   cd Mind-Scribe-Desktop-
-   ```
-
-2. Create a virtual environment:
-   ```bash
-   python -m venv venv
-   ```
-
-3. Activate the virtual environment:
-   ```bash
-   .\venv\Scripts\activate
-   ```
-
-4. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-5. Build the executable:
-   ```bash
-   .\build.ps1
-   ```
-   Or manually:
-   ```bash
-   python -m PyInstaller MindScribe.spec --clean -y
-   ```
-
-6. Copy your `.env` file to `dist\MindScribe\` with your API keys (`GROQ_API_KEY` and/or `OPENAI_API_KEY`).
-
-7. Run the application:
-   ```bash
-   dist\MindScribe\MindScribe.exe
-   ```
-
-### Windows Defender Note
-
-Unsigned PyInstaller executables may be flagged by Windows Defender. To prevent this, add `dist\MindScribe\` to your exclusions:
-
-Windows Security > Virus & threat protection > Manage settings > Exclusions > Add folder
-
-### Distribution
-
-The `dist\MindScribe\` folder is self-contained and can be copied or zipped for distribution. Users need to place their own `.env` file next to `MindScribe.exe`.
-
-## Building from Source (macOS)
-
-### Prerequisites
-
-- Python 3.11+ (tested with 3.14)
-- pip (included with Python)
-- Xcode Command Line Tools (`xcode-select --install`)
-
-### Steps
-
-1. Clone the repo:
-   ```bash
-   git clone https://github.com/aziztraorebf-ctrl/Mind-Scribe-Desktop-.git
-   cd Mind-Scribe-Desktop-
-   ```
-
-2. Create and activate a virtual environment:
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   ```
-
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. Configure API keys:
-   ```bash
-   cp .env.example .env
-   # Edit .env and add your GROQ_API_KEY and/or OPENAI_API_KEY
-   ```
-
-5. Run in dev mode (recommended for first test):
-   ```bash
-   python run.py
-   ```
-
-6. Build the standalone app (optional):
-   ```bash
-   chmod +x build.sh
-   ./build.sh
-   ```
-
-7. Run the built app:
-   ```bash
-   ./dist/MindScribe/MindScribe
-   ```
-
-### macOS Permissions
-
-macOS requires explicit permission for:
-- **Microphone**: System Preferences > Privacy & Security > Microphone (prompted automatically)
-- **Accessibility** (for global hotkeys): System Preferences > Privacy & Security > Accessibility > add Terminal (or the MindScribe app)
-- **Input Monitoring** (for pynput): System Preferences > Privacy & Security > Input Monitoring > add Terminal (or the MindScribe app)
-
-Without Accessibility + Input Monitoring permissions, global hotkeys will not work.
-
-### macOS Notes
-
-- Default hotkey is **Cmd+Shift+Space** (not Ctrl)
-- The app uses **SF Pro Display** font (native macOS)
-- Notifications use native macOS alerts via `osascript`
-- Config is stored in `~/Library/Application Support/MindScribeDesktop/config.json`
-
-## Current Status
-
-### Phase 1-3: Core MVP (complete)
-- [x] Audio recording with sounddevice (with device fallback)
-- [x] Groq/OpenAI transcription with fallback and retry
-- [x] Global hotkey (toggle and hold modes)
-- [x] Universal text insertion via clipboard
-- [x] System tray with state icons and dynamic hotkey display
-- [x] Floating overlay with reactive waveform
-- [x] Recording timer (freezes on pause)
-- [x] Overlay control buttons (Pause/Resume, Stop, Cancel)
-- [x] Draggable overlay (preserves position across state changes)
-
-### Phase 4: Settings UI (complete)
-- [x] Dark-themed settings dashboard (tkinter)
-- [x] Language, provider, model selection
-- [x] Microphone picker with deduplication and system default
-- [x] LLM post-processing toggle (punctuation cleanup, filler removal)
-- [x] Hotkey preset dropdown (7 OS-adaptive presets) with Test button
-- [x] Toggle/Hold record mode selection
-- [x] Notification and clipboard restore toggles
-
-### Phase 5: Packaging & Cross-Platform (complete)
-- [x] PyInstaller packaging (Windows .exe, macOS binary)
-- [x] Custom application icon (Windows .ico, macOS .icns)
-- [x] Build scripts (build.ps1 for Windows, build.sh for macOS)
-- [x] Startup Ready overlay (centered, fade-in/out, green pulse, 10s)
-- [x] OS-adaptive fonts (Segoe UI / SF Pro Display)
-- [x] Cross-platform PyInstaller spec (conditional backends)
-- [x] 33 unit tests passing
-
-### Future
-- [ ] macOS end-to-end testing and polish
-- [ ] Auto-start at boot
-- [ ] Multi-language auto-detection
-- [ ] Network error handling improvements (adaptive retry for rate limits)
-
-## Tech Decisions
-
-- **Python over Tauri/Electron**: Best ratio of dev speed / performance / cross-platform for this type of system tool. ~30-50MB RAM, ~15-30MB packaged size.
-- **sounddevice over PyAudio**: Better macOS compatibility, cleaner API.
-- **pynput over keyboard**: Cross-platform global hotkeys without macOS permission issues.
-- **whisper-large-v3 (not turbo)**: Better accuracy for non-standard accents (8.4% vs 10.9% WER).
-- **language="fr" parameter**: Reduces word error rate by ~30% for French transcription.
 
 ## License
 
