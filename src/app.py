@@ -1,9 +1,12 @@
 """MindScribe Desktop - Main application orchestration."""
 
 import logging
+import platform
 import threading
 import time
 from enum import Enum, auto
+
+_IS_MACOS = platform.system() == "Darwin"
 
 from src.config.dotenv_loader import load_env
 from src.config.settings import Settings
@@ -12,8 +15,10 @@ from src.core.chunker import prepare_audio
 from src.core.hotkey_manager import HotkeyManager
 from src.core.text_inserter import insert_text
 from src.core.transcriber import Transcriber, TranscriptionError
+from src.ui.history_window import HistoryWindow
 from src.ui.notification import notify
 from src.ui.overlay import RecordingOverlay
+from src.ui.sounds import play_ready, play_record_start, play_record_stop
 from src.ui.settings_window import SettingsWindow
 from src.ui.tray_icon import TrayIcon
 
@@ -42,6 +47,7 @@ class MindScribeApp:
         # State
         self._state = AppState.IDLE
         self._lock = threading.Lock()
+        self._previous_app = None  # NSRunningApplication saved before recording
 
         # Components
         self.recorder = AudioRecorder(
@@ -65,10 +71,14 @@ class MindScribeApp:
             mode=self.settings.record_mode,
         )
 
+        # Transcription history
+        self.history_window = HistoryWindow()
+
         # System tray
         self.tray = TrayIcon(
             on_toggle=self._on_hotkey_toggle,
             on_settings=self._open_settings,
+            on_history=self._open_history,
             on_quit=self._request_quit,
             hotkey_display=self.hotkey_manager.hotkey_display,
         )
@@ -118,6 +128,7 @@ class MindScribeApp:
 
         # Show brief "Ready" overlay so the user knows the app is running
         self.overlay.show_ready(self.hotkey_manager.hotkey_display)
+        play_ready()
 
         logger.info(
             "MindScribe Desktop started. Press %s to toggle recording.",
@@ -143,6 +154,10 @@ class MindScribeApp:
     def _open_settings(self) -> None:
         """Open the settings window."""
         self.settings_window.open()
+
+    def _open_history(self) -> None:
+        """Open the transcription history window."""
+        self.history_window.open()
 
     def _on_settings_saved(self, settings: Settings) -> None:
         """Apply updated settings to live components."""
@@ -234,10 +249,19 @@ class MindScribeApp:
 
     def _start_recording(self) -> None:
         """Begin recording audio."""
+        # Save the frontmost app BEFORE showing overlay (which activates MindScribe)
+        if _IS_MACOS:
+            try:
+                from AppKit import NSWorkspace
+                self._previous_app = NSWorkspace.sharedWorkspace().frontmostApplication()
+                logger.debug("Saved previous app: %s", self._previous_app.localizedName())
+            except Exception:
+                self._previous_app = None
         self._set_state(AppState.RECORDING)
         self.tray.set_recording()
         self.overlay.show_recording()
         self.recorder.start()
+        play_record_start()
         logger.info("Recording started...")
 
     def _stop_and_transcribe(self, from_overlay: bool = False) -> None:
@@ -249,6 +273,7 @@ class MindScribeApp:
         """
         self._set_state(AppState.TRANSCRIBING)
         self.tray.set_transcribing()
+        play_record_stop()
 
         if from_overlay:
             # Hide overlay so focus returns to the user's target window
@@ -307,12 +332,35 @@ class MindScribeApp:
                 logger.info("Post-processing transcription...")
                 full_text = self.transcriber.post_process(full_text)
 
+            # Hide overlay BEFORE pasting so the OS returns focus to the
+            # user's target window.  Without this, Cmd+V lands in the
+            # overlay (which has no text fields) and the text is lost.
+            self.overlay.hide()
+            self.tray.set_idle()
+
+            # Reactivate the app the user was in before recording started
+            if _IS_MACOS and self._previous_app is not None:
+                try:
+                    # NSApplicationActivateIgnoringOtherApps = 1 << 1
+                    self._previous_app.activateWithOptions_(1 << 1)
+                    logger.debug(
+                        "Reactivated previous app: %s",
+                        self._previous_app.localizedName(),
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to reactivate previous app: %s", exc)
+
+            time.sleep(1.0)  # let macOS complete the app switch (Electron apps need ~1s)
+
             # Insert into active field
             insert_text(
                 full_text,
                 restore_clipboard=self.settings.restore_clipboard,
                 restore_delay=self.settings.clipboard_restore_delay,
             )
+
+            # Store in history
+            self.history_window.add_entry(full_text)
 
             logger.info("Transcription complete: %d chars", len(full_text))
             if self.settings.show_notifications:
@@ -336,8 +384,8 @@ class MindScribeApp:
                 self.on_error(f"Unexpected error: {exc}")
 
         finally:
-            self.tray.set_idle()
             self.overlay.hide()
+            self.tray.set_idle()
             self._set_state(AppState.IDLE)
 
     def _set_state(self, new_state: AppState) -> None:
