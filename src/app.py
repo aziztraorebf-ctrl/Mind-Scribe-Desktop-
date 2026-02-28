@@ -344,20 +344,23 @@ class MindScribeApp:
             self.overlay.hide()
             self.tray.set_idle()
 
-            # Reactivate the previous app then paste after a delay.
+            # Reactivate the previous app using osascript (synchronous, reliable).
+            # activateWithOptions_ from a background thread is non-deterministic.
             if _IS_MACOS and self._previous_app is not None:
                 try:
-                    self._previous_app.activateWithOptions_(1 << 1)
-                    logger.debug(
-                        "Reactivated previous app: %s",
-                        self._previous_app.localizedName(),
+                    app_name = self._previous_app.localizedName()
+                    import subprocess
+                    subprocess.run(
+                        ["osascript", "-e", f'tell application "{app_name}" to activate'],
+                        capture_output=True,
+                        timeout=3,
                     )
+                    logger.debug("Reactivated previous app via osascript: %s", app_name)
                 except Exception as exc:
                     logger.warning("Failed to reactivate previous app: %s", exc)
 
             # Wait for macOS to complete the app switch before pasting.
-            # Electron apps (VS Code) need ~1.5s to fully receive focus.
-            time.sleep(1.5)
+            time.sleep(0.8)
 
             insert_text(
                 full_text,
