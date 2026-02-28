@@ -1,92 +1,61 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec file for MindScribe Desktop.
+"""PyInstaller spec file for MindScribe Desktop (macOS / PyQt6).
 
 Build command:
     pyinstaller MindScribe.spec --clean
 
 Output:
-    dist/MindScribe/MindScribe.exe
+    dist/MindScribe.app
 """
 
 import sys
-import platform
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 block_cipher = None
 
-# Collect PortAudio DLLs bundled with sounddevice
 sounddevice_data = collect_data_files('_sounddevice_data')
-
-# Collect plyer platform backends (lazy-loaded)
-if platform.system() == "Darwin":
-    plyer_imports = collect_submodules('plyer.platforms.macosx')
-else:
-    plyer_imports = collect_submodules('plyer.platforms.win')
-
-# Platform-specific hidden imports
-if platform.system() == "Darwin":
-    _platform_imports = [
-        'plyer.platforms.macosx',
-        'plyer.platforms.macosx.notification',
-        'pynput.keyboard._darwin',
-        'pynput.mouse._darwin',
-        'pystray._darwin',
-    ]
-else:
-    _platform_imports = [
-        'plyer.platforms.win',
-        'plyer.platforms.win.notification',
-        'pynput.keyboard._win32',
-        'pynput.mouse._win32',
-        'pystray._win32',
-    ]
+plyer_imports = collect_submodules('plyer.platforms.macosx')
+pyqt6_imports = collect_submodules('PyQt6')
 
 a = Analysis(
     ['run.py'],
     pathex=[],
     binaries=[],
     datas=sounddevice_data,
-    hiddenimports=_platform_imports + [
-        # App modules (PyInstaller may miss dynamic imports)
-        'src',
-        'src.app',
-        'src.config',
-        'src.config.settings',
-        'src.config.dotenv_loader',
-        'src.core',
-        'src.core.audio_recorder',
-        'src.core.chunker',
-        'src.core.hotkey_manager',
-        'src.core.text_inserter',
-        'src.core.transcriber',
-        'src.ui',
-        'src.ui.icons',
-        'src.ui.notification',
-        'src.ui.overlay',
-        'src.ui.settings_window',
-        'src.ui.tray_icon',
-        # audioop replacement for Python 3.13+
-        'audioop_lts',
-        'audioop',
-    ] + plyer_imports,
+    hiddenimports=[
+        # macOS platform backends
+        'plyer.platforms.macosx',
+        'plyer.platforms.macosx.notification',
+        'pynput.keyboard._darwin',
+        'pynput.mouse._darwin',
+        # pystray no longer used (replaced by QSystemTrayIcon)
+        # PyQt6
+        'PyQt6.QtCore',
+        'PyQt6.QtWidgets',
+        'PyQt6.QtGui',
+        'PyQt6.sip',
+        # App modules
+        'src', 'src.app',
+        'src.config', 'src.config.settings', 'src.config.dotenv_loader',
+        'src.core', 'src.core.audio_recorder', 'src.core.chunker',
+        'src.core.hotkey_manager', 'src.core.quartz_hotkey',
+        'src.core.text_inserter', 'src.core.transcriber',
+        'src.ui', 'src.ui.icons', 'src.ui.notification',
+        'src.ui.overlay', 'src.ui.settings_window', 'src.ui.tray_icon',
+        'src.ui.sounds', 'src.ui.history_window',
+        'src.preflight_macos',
+        # audioop replacement
+        'audioop_lts', 'audioop',
+    ] + plyer_imports + pyqt6_imports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        # Dev-only packages
-        'pytest',
-        'pytest_cov',
-        'customtkinter',
-        # Unused numpy sub-packages (saves ~30MB)
-        'numpy.testing',
-        'numpy.f2py',
-        'numpy.distutils',
-        'numpy.doc',
-        # Unused stdlib
-        'unittest',
-        'pdb',
-        'doctest',
+        'pytest', 'pytest_cov',
+        'tkinter', '_tkinter', 'customtkinter',
+        'numpy.testing', 'numpy.f2py', 'numpy.distutils', 'numpy.doc',
+        'unittest', 'pdb', 'doctest',
     ],
     noarchive=False,
     optimize=0,
@@ -103,14 +72,14 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,  # Disable UPX - avoids false antivirus positives
-    icon='assets/mindscribe.icns' if platform.system() == "Darwin" else 'assets/mindscribe.ico',
-    console=False,  # No console window (GUI app)
+    upx=False,
+    icon='assets/mindscribe.icns',
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
-    entitlements_file=None,
+    entitlements_file='macos/entitlements.plist',
 )
 
 coll = COLLECT(
@@ -121,4 +90,22 @@ coll = COLLECT(
     upx=False,
     upx_exclude=[],
     name='MindScribe',
+)
+
+app = BUNDLE(
+    coll,
+    name='MindScribe.app',
+    icon='assets/mindscribe.icns',
+    bundle_identifier='com.mindscribe.desktop',
+    info_plist={
+        'CFBundleName': 'MindScribe',
+        'CFBundleDisplayName': 'MindScribe Desktop',
+        'CFBundleVersion': '1.0.0',
+        'CFBundleShortVersionString': '1.0.0',
+        'LSMinimumSystemVersion': '12.0',
+        'NSHighResolutionCapable': True,
+        'LSUIElement': True,
+        'NSMicrophoneUsageDescription': 'MindScribe needs microphone access to record your voice for transcription.',
+        'NSAppleEventsUsageDescription': 'MindScribe uses AppleScript to display native notifications.',
+    },
 )

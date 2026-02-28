@@ -1,109 +1,161 @@
-"""System tray icon with state indicators and context menu."""
+"""System tray icon using PyQt6 QSystemTrayIcon.
 
+Replaces the pystray-based tray icon to avoid macOS SIGTRAP crashes.
+pystray runs AppKit on a daemon thread which conflicts with PyQt6's
+Cocoa event loop; QSystemTrayIcon integrates natively with Qt.
+"""
+
+import io
 import logging
-import threading
-from typing import Callable
 
-import pystray
-from pystray import MenuItem as Item
+from PyQt6.QtCore import QTimer, Qt
+from PyQt6.QtGui import QAction, QIcon, QImage, QPixmap
+from PyQt6.QtWidgets import QMenu, QSystemTrayIcon
 
 from src.ui.icons import icon_idle, icon_recording, icon_transcribing
 
 logger = logging.getLogger(__name__)
 
 
+def _pil_to_qicon(pil_image) -> QIcon:
+    """Convert a Pillow Image to a QIcon."""
+    buf = io.BytesIO()
+    pil_image.save(buf, format="PNG")
+    qimage = QImage()
+    qimage.loadFromData(buf.getvalue())
+    return QIcon(QPixmap.fromImage(qimage))
+
+
 class TrayIcon:
-    """System tray icon that reflects app state and provides a context menu."""
+    """System tray icon that reflects app state and provides a context menu.
+
+    All methods are safe to call from any thread — calls that touch Qt
+    widgets are automatically marshalled to the main thread via
+    QTimer.singleShot.
+    """
 
     def __init__(
         self,
-        on_toggle: Callable[[], None] | None = None,
-        on_settings: Callable[[], None] | None = None,
-        on_quit: Callable[[], None] | None = None,
+        on_toggle=None,
+        on_settings=None,
+        on_history=None,
+        on_quit=None,
         hotkey_display: str = "Ctrl + Shift + Space",
     ):
         self._on_toggle = on_toggle
         self._on_settings = on_settings
+        self._on_history = on_history
         self._on_quit = on_quit
         self._hotkey_display = hotkey_display
-        self._icon: pystray.Icon | None = None
-        self._thread: threading.Thread | None = None
+        self._tray: QSystemTrayIcon | None = None
+        self._menu: QMenu | None = None
+        self._toggle_action: QAction | None = None
 
     def start(self) -> None:
-        """Start the tray icon in a background thread."""
-        menu = pystray.Menu(
-            Item(
-                f"Toggle Recording ({self._hotkey_display})",
-                self._handle_toggle,
-                default=True,  # Double-click action
-            ),
-            Item("---", None),  # Separator
-            Item("Settings", self._handle_settings),
-            Item("---", None),
-            Item("Quit", self._handle_quit),
-        )
+        """Create and show the tray icon."""
+        self._tray = QSystemTrayIcon()
+        self._tray.setIcon(_pil_to_qicon(icon_idle()))
+        self._tray.setToolTip("MindScribe Desktop - Ready")
 
-        self._icon = pystray.Icon(
-            name="MindScribe Desktop",
-            icon=icon_idle(),
-            title="MindScribe Desktop - Ready",
-            menu=menu,
-        )
+        self._build_menu()
 
-        self._thread = threading.Thread(target=self._icon.run, daemon=True)
-        self._thread.start()
+        self._tray.activated.connect(self._on_activated)
+        self._tray.show()
         logger.info("Tray icon started")
+
+    def _build_menu(self) -> None:
+        """Build (or rebuild) the context menu."""
+        self._menu = QMenu()
+
+        self._toggle_action = QAction(
+            f"Toggle Recording ({self._hotkey_display})", self._menu
+        )
+        self._toggle_action.triggered.connect(self._handle_toggle)
+        self._menu.addAction(self._toggle_action)
+
+        self._menu.addSeparator()
+
+        history_action = QAction("History", self._menu)
+        history_action.triggered.connect(self._handle_history)
+        self._menu.addAction(history_action)
+
+        settings_action = QAction("Settings", self._menu)
+        settings_action.triggered.connect(self._handle_settings)
+        self._menu.addAction(settings_action)
+
+        self._menu.addSeparator()
+
+        quit_action = QAction("Quit", self._menu)
+        quit_action.triggered.connect(self._handle_quit)
+        self._menu.addAction(quit_action)
+
+        if self._tray is not None:
+            self._tray.setContextMenu(self._menu)
 
     def stop(self) -> None:
         """Remove the tray icon."""
-        if self._icon is not None:
-            self._icon.stop()
-            self._icon = None
+        if self._tray is not None:
+            self._tray.hide()
+            self._tray = None
         logger.info("Tray icon stopped")
+
+    # ------------------------------------------------------------------
+    # State changes (thread-safe via QTimer.singleShot)
+    # ------------------------------------------------------------------
 
     def set_idle(self) -> None:
         """Switch to idle state (gray icon)."""
-        if self._icon:
-            self._icon.icon = icon_idle()
-            self._icon.title = "MindScribe Desktop - Ready"
+        QTimer.singleShot(0, self._apply_idle)
+
+    def _apply_idle(self) -> None:
+        if self._tray:
+            self._tray.setIcon(_pil_to_qicon(icon_idle()))
+            self._tray.setToolTip("MindScribe Desktop - Ready")
 
     def set_recording(self) -> None:
         """Switch to recording state (red icon)."""
-        if self._icon:
-            self._icon.icon = icon_recording()
-            self._icon.title = "MindScribe Desktop - Recording..."
+        QTimer.singleShot(0, self._apply_recording)
+
+    def _apply_recording(self) -> None:
+        if self._tray:
+            self._tray.setIcon(_pil_to_qicon(icon_recording()))
+            self._tray.setToolTip("MindScribe Desktop - Recording...")
 
     def set_transcribing(self) -> None:
         """Switch to transcribing state (amber icon)."""
-        if self._icon:
-            self._icon.icon = icon_transcribing()
-            self._icon.title = "MindScribe Desktop - Transcribing..."
+        QTimer.singleShot(0, self._apply_transcribing)
 
-    def _handle_toggle(self, icon, item) -> None:
+    def _apply_transcribing(self) -> None:
+        if self._tray:
+            self._tray.setIcon(_pil_to_qicon(icon_transcribing()))
+            self._tray.setToolTip("MindScribe Desktop - Transcribing...")
+
+    # ------------------------------------------------------------------
+    # Menu callbacks
+    # ------------------------------------------------------------------
+
+    def _on_activated(self, reason) -> None:
+        """Handle tray icon double-click (toggle recording)."""
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self._handle_toggle()
+
+    def _handle_toggle(self) -> None:
         if self._on_toggle:
-            threading.Thread(target=self._on_toggle, daemon=True).start()
+            self._on_toggle()
 
-    def _handle_settings(self, icon, item) -> None:
+    def _handle_settings(self) -> None:
         if self._on_settings:
-            threading.Thread(target=self._on_settings, daemon=True).start()
+            self._on_settings()
 
-    def _handle_quit(self, icon, item) -> None:
+    def _handle_history(self) -> None:
+        if self._on_history:
+            self._on_history()
+
+    def _handle_quit(self) -> None:
         if self._on_quit:
             self._on_quit()
 
     def update_hotkey_display(self, new_display: str) -> None:
         """Rebuild the tray menu with an updated hotkey display string."""
         self._hotkey_display = new_display
-        if self._icon is not None:
-            self._icon.menu = pystray.Menu(
-                Item(
-                    f"Toggle Recording ({self._hotkey_display})",
-                    self._handle_toggle,
-                    default=True,
-                ),
-                Item("---", None),
-                Item("Settings", self._handle_settings),
-                Item("---", None),
-                Item("Quit", self._handle_quit),
-            )
-            self._icon.update_menu()
+        QTimer.singleShot(0, self._build_menu)

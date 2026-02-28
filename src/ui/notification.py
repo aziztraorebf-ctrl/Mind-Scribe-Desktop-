@@ -44,7 +44,10 @@ def _notify_windows(title: str, message: str) -> None:
 def _notify_macos(title: str, message: str) -> None:
     """macOS notification via osascript."""
     import subprocess
-    script = f'display notification "{message}" with title "{title}"'
+    # Escape double quotes and backslashes for AppleScript
+    safe_title = title.replace("\\", "\\\\").replace('"', '\\"')
+    safe_message = message.replace("\\", "\\\\").replace('"', '\\"')
+    script = f'display notification "{safe_message}" with title "{safe_title}"'
     subprocess.run(["osascript", "-e", script], capture_output=True, timeout=5)
 
 

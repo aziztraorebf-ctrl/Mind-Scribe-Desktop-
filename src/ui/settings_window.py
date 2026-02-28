@@ -1,23 +1,38 @@
-"""Settings window using tkinter for MindScribe Desktop configuration.
+"""Settings window using PyQt6 for MindScribe Desktop configuration.
 
-Uses the overlay's tk.Tk root to avoid Tcl/Tk thread conflicts.
-All UI operations are scheduled on the overlay's mainloop via root.after().
+PyQt6 version for macOS compatibility. Replaces the tkinter settings window.
+Thread-safe: open() can be called from any thread via Qt signal.
 """
 
 import logging
 import platform
+import re
 import threading
-import tkinter as tk
-from tkinter import ttk
 from typing import Callable
+
+from PyQt6.QtCore import QTimer, Qt, pyqtSignal
+from PyQt6.QtGui import QFont
+from PyQt6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QScrollArea,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
 from src.config.settings import Settings
 from src.core.audio_recorder import AudioRecorder
+from src.core.vocabulary_store import VocabularyStore
 
 logger = logging.getLogger(__name__)
 
 # OS-adaptive UI font
-_UI_FONT = "SF Pro Display" if platform.system() == "Darwin" else "Segoe UI"
+_UI_FONT = ".AppleSystemUIFont" if platform.system() == "Darwin" else "Segoe UI"
+_MONO_FONT = "Menlo" if platform.system() == "Darwin" else "Consolas"
 
 # Language options: display label -> ISO-639-1 code
 LANGUAGE_OPTIONS = {
@@ -39,7 +54,7 @@ MODEL_LABELS = {
 # Record mode options
 RECORD_MODE_LABELS = {"toggle": "Toggle (press to start/stop)", "hold": "Hold (hold to record)"}
 
-# Hotkey presets: pynput combo string -> display label (OS-adaptive)
+# Hotkey presets
 _IS_MAC = platform.system() == "Darwin"
 _MOD = "<cmd>" if _IS_MAC else "<ctrl>"
 _MOD_LABEL = "Cmd" if _IS_MAC else "Ctrl"
@@ -52,6 +67,7 @@ HOTKEY_PRESETS = {
     "<f8>": "F8",
     "<f7>": "F7",
     f"{_MOD}+<alt>+<space>": f"{_MOD_LABEL} + Alt + Space",
+    f"{_MOD}+<alt>": f"{_MOD_LABEL} + Alt",
 }
 HOTKEY_PRESET_LABELS = list(HOTKEY_PRESETS.values())
 
@@ -65,356 +81,484 @@ ACCENT_HOVER = "#2563eb"
 BTN_CANCEL_BG = "#555555"
 SECTION_FG = "#ffffff"
 
+# Global stylesheet for the settings window
+_DARK_STYLESHEET = """
+QWidget#settings_root {
+    background-color: %(bg)s;
+}
+QScrollArea {
+    background-color: %(bg)s;
+    border: none;
+}
+QWidget#scroll_inner {
+    background-color: %(bg)s;
+}
+QLabel {
+    color: %(fg)s;
+    background: transparent;
+}
+QLabel#section_label {
+    color: %(section_fg)s;
+    font-weight: bold;
+}
+QLabel#dim_label {
+    color: %(fg_dim)s;
+}
+QComboBox {
+    background-color: %(bg_field)s;
+    color: %(fg)s;
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 5px 8px;
+    min-height: 22px;
+}
+QComboBox::drop-down {
+    border: none;
+    width: 24px;
+}
+QComboBox::down-arrow {
+    image: none;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid %(fg_dim)s;
+    margin-right: 8px;
+}
+QComboBox QAbstractItemView {
+    background-color: %(bg_field)s;
+    color: %(fg)s;
+    selection-background-color: %(accent)s;
+    selection-color: white;
+    border: 1px solid #444;
+}
+QTextEdit {
+    background-color: %(bg_field)s;
+    color: %(fg)s;
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 4px;
+}
+QCheckBox {
+    color: %(fg)s;
+    spacing: 8px;
+}
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border-radius: 3px;
+    border: 1px solid #666;
+    background-color: %(bg_field)s;
+}
+QCheckBox::indicator:checked {
+    background-color: %(accent)s;
+    border-color: %(accent)s;
+}
+""" % {
+    "bg": BG,
+    "bg_field": BG_FIELD,
+    "fg": FG,
+    "fg_dim": FG_DIM,
+    "section_fg": SECTION_FG,
+    "accent": ACCENT,
+}
 
-class SettingsWindow:
-    """Settings dashboard window using plain tkinter.
 
-    Opens as a Toplevel from the overlay's tk.Tk root so both share
-    the same Tcl interpreter thread, avoiding crashes.
+class SettingsWindow(QWidget):
+    """Settings dashboard window using PyQt6.
+
+    Opens as an independent top-level window. Thread-safe via signals.
     """
 
-    def __init__(self, settings: Settings, on_save: Callable[[Settings], None] | None = None) -> None:
+    _sig_open = pyqtSignal()
+    _sig_raise = pyqtSignal()
+
+    def __init__(
+        self,
+        settings: Settings,
+        on_save: Callable[[Settings], None] | None = None,
+        vocabulary: VocabularyStore | None = None,
+    ) -> None:
+        super().__init__()
         self._settings = settings
         self._on_save = on_save
-        self._tk_root: tk.Tk | None = None
-        self._window: tk.Toplevel | None = None
         self._is_open = False
         self._devices: list[dict] = []
         self._hotkey_manager = None
+        self._testing_hotkey = False
+        self._test_combo_label = ""
+        self._test_target_keys: set[int] = set()
+        self._test_pressed_keys: set[int] = set()
+
+        # UI widget references (populated in _build_window)
+        self._lang_combo: QComboBox | None = None
+        self._provider_combo: QComboBox | None = None
+        self._model_combo: QComboBox | None = None
+        self._model_hint: QLabel | None = None
+        self._prompt_text: QTextEdit | None = None
+        self._post_process_cb: QCheckBox | None = None
+        self._vocabulary = vocabulary
+        self._vocab_text: QTextEdit | None = None
+        self._device_combo: QComboBox | None = None
+        self._mode_combo: QComboBox | None = None
+        self._hotkey_combo: QComboBox | None = None
+        self._test_btn: QPushButton | None = None
+        self._hotkey_test_label: QLabel | None = None
+        self._notif_cb: QCheckBox | None = None
+        self._clipboard_cb: QCheckBox | None = None
+
+        self._sig_open.connect(self._build_window)
+        self._sig_raise.connect(self._raise_window)
 
     @property
     def is_open(self) -> bool:
         return self._is_open
-
-    def set_tk_root(self, root: tk.Tk) -> None:
-        """Set the shared tk root (from the overlay thread)."""
-        self._tk_root = root
 
     def set_hotkey_manager(self, manager) -> None:
         """Set reference to the HotkeyManager for pause/resume during test."""
         self._hotkey_manager = manager
 
     def open(self) -> None:
-        """Schedule opening the settings window on the tk mainloop thread."""
+        """Open the settings window (thread-safe)."""
         if self._is_open:
-            if self._window is not None and self._tk_root is not None:
-                try:
-                    self._tk_root.after(0, self._focus_window)
-                except Exception:
-                    self._is_open = False
-            if self._is_open:
-                return
-
-        if self._tk_root is None:
-            logger.error("Cannot open settings: no tk root set")
+            self._sig_raise.emit()
             return
+        self._sig_open.emit()
 
-        self._tk_root.after(0, self._build_window)
+    def _raise_window(self) -> None:
+        """Bring the existing settings window to front (runs on Qt thread)."""
+        self.raise_()
+        self.activateWindow()
 
-    def _focus_window(self) -> None:
-        if self._window is not None:
-            self._window.focus_force()
-            self._window.lift()
+    # ------------------------------------------------------------------
+    # Window construction (runs on Qt main thread)
+    # ------------------------------------------------------------------
 
     def _build_window(self) -> None:
-        """Build the settings UI as a Toplevel window."""
-        self._window = tk.Toplevel(self._tk_root)
-        self._window.title("MindScribe Desktop - Settings")
-        self._window.geometry("500x600")
-        self._window.resizable(False, False)
-        self._window.attributes("-topmost", True)
-        self._window.configure(bg=BG)
-        self._window.protocol("WM_DELETE_WINDOW", self._on_close)
+        if self._is_open:
+            return
         self._is_open = True
 
+        self.setWindowTitle("MindScribe Desktop - Settings")
+        self.setObjectName("settings_root")
+        self.setFixedSize(500, 600)
+        self.setWindowFlags(
+            Qt.WindowType.Window
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.setStyleSheet(_DARK_STYLESHEET)
+
         # Center on screen
-        self._window.update_idletasks()
-        sw = self._window.winfo_screenwidth()
-        sh = self._window.winfo_screenheight()
-        x = (sw - 500) // 2
-        y = (sh - 600) // 2
-        self._window.geometry(f"500x600+{x}+{y}")
+        screen = self.screen()
+        if screen is not None:
+            geo = screen.availableGeometry()
+            self.move(
+                (geo.width() - 500) // 2 + geo.x(),
+                (geo.height() - 600) // 2 + geo.y(),
+            )
 
-        # Configure ttk styles for dark theme
-        style = ttk.Style(self._window)
-        style.theme_use("clam")
-        style.configure("Dark.TFrame", background=BG)
-        style.configure("Dark.TLabel", background=BG, foreground=FG, font=(_UI_FONT, 10))
-        style.configure("Section.TLabel", background=BG, foreground=SECTION_FG, font=(_UI_FONT, 12, "bold"))
-        style.configure("Dim.TLabel", background=BG, foreground=FG_DIM, font=("Consolas", 10))
-        style.configure("Dark.TCombobox", fieldbackground=BG_FIELD, background=BG_FIELD,
-                         foreground=FG, selectbackground=ACCENT, selectforeground="#ffffff")
-        style.map("Dark.TCombobox",
-                  fieldbackground=[("readonly", BG_FIELD)],
-                  foreground=[("readonly", FG)])
-        style.configure("Dark.TCheckbutton", background=BG, foreground=FG, font=(_UI_FONT, 10))
-        style.map("Dark.TCheckbutton", background=[("active", BG)])
+        # Clear previous layout if re-opening
+        if self.layout() is not None:
+            QWidget().setLayout(self.layout())
 
-        # Scrollable canvas
-        canvas = tk.Canvas(self._window, bg=BG, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(self._window, orient="vertical", command=canvas.yview)
-        scroll_frame = ttk.Frame(canvas, style="Dark.TFrame")
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
-        scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=scroll_frame, anchor="nw", width=480)
-        canvas.configure(yscrollcommand=scrollbar.set)
+        # Scrollable area
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
-        canvas.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=(10, 0))
-        scrollbar.pack(side="right", fill="y", pady=(10, 0))
-
-        # Enable mouse wheel scrolling
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        inner = QWidget()
+        inner.setObjectName("scroll_inner")
+        form = QVBoxLayout(inner)
+        form.setContentsMargins(12, 12, 12, 12)
+        form.setSpacing(4)
 
         # --- Transcription Section ---
-        self._add_section(scroll_frame, "Transcription")
+        self._add_section(form, "Transcription")
 
         # Language
-        self._add_field_label(scroll_frame, "Language")
+        self._add_field_label(form, "Language")
         current_lang = _code_to_label(self._settings.language, LANGUAGE_OPTIONS)
-        self._lang_var = tk.StringVar(value=current_lang)
-        self._lang_combo = ttk.Combobox(
-            scroll_frame, textvariable=self._lang_var, values=LANGUAGE_LABELS,
-            state="readonly", style="Dark.TCombobox", width=38
-        )
-        self._lang_combo.pack(anchor="w", padx=24, pady=(0, 10))
+        self._lang_combo = self._add_combo(form, LANGUAGE_LABELS, current_lang)
 
         # Provider
-        self._add_field_label(scroll_frame, "Primary Provider")
+        self._add_field_label(form, "Primary Provider")
         provider_labels = list(PROVIDER_LABELS.values())
         current_provider = PROVIDER_LABELS.get(self._settings.primary_provider, provider_labels[0])
-        self._provider_var = tk.StringVar(value=current_provider)
-        self._provider_combo = ttk.Combobox(
-            scroll_frame, textvariable=self._provider_var, values=provider_labels,
-            state="readonly", style="Dark.TCombobox", width=38
-        )
-        self._provider_combo.pack(anchor="w", padx=24, pady=(0, 10))
-        self._provider_combo.bind("<<ComboboxSelected>>", lambda e: self._on_provider_changed())
+        self._provider_combo = self._add_combo(form, provider_labels, current_provider)
+        self._provider_combo.currentTextChanged.connect(self._on_provider_changed)
 
         # Whisper Model
-        self._add_field_label(scroll_frame, "Whisper Model")
+        self._add_field_label(form, "Whisper Model")
         model_labels = list(MODEL_LABELS.values())
         current_model = MODEL_LABELS.get(self._settings.whisper_model, model_labels[0])
-        self._model_var = tk.StringVar(value=current_model)
-        self._model_combo = ttk.Combobox(
-            scroll_frame, textvariable=self._model_var, values=model_labels,
-            state="readonly", style="Dark.TCombobox", width=38
-        )
-        self._model_combo.pack(anchor="w", padx=24, pady=(0, 2))
-        self._model_hint = ttk.Label(
-            scroll_frame, text="", style="Dim.TLabel"
-        )
-        self._model_hint.pack(anchor="w", padx=24, pady=(0, 10))
-        # Set initial state based on current provider
+        self._model_combo = self._add_combo(form, model_labels, current_model)
+
+        self._model_hint = QLabel("")
+        self._model_hint.setObjectName("dim_label")
+        self._model_hint.setFont(QFont(_MONO_FONT, 10))
+        form.addWidget(self._model_hint)
         self._on_provider_changed()
 
         # Prompt
-        self._add_field_label(scroll_frame, "Context Prompt (helps Whisper accuracy)")
-        self._prompt_text = tk.Text(
-            scroll_frame, width=40, height=3, bg=BG_FIELD, fg=FG,
-            insertbackground=FG, font=(_UI_FONT, 10), relief="flat",
-            wrap="word", padx=6, pady=4
-        )
-        self._prompt_text.insert("1.0", self._settings.prompt)
-        self._prompt_text.pack(anchor="w", padx=24, pady=(0, 10))
+        self._add_field_label(form, "Context Prompt (helps Whisper accuracy)")
+        self._prompt_text = QTextEdit()
+        self._prompt_text.setFont(QFont(_UI_FONT, 10))
+        self._prompt_text.setFixedHeight(70)
+        self._prompt_text.setPlainText(self._settings.prompt)
+        form.addWidget(self._prompt_text)
+        self._add_spacer(form)
 
         # Post-processing
-        self._post_process_var = tk.BooleanVar(value=self._settings.post_process)
-        ttk.Checkbutton(
-            scroll_frame, text="Clean up text with LLM (fix punctuation, remove fillers)",
-            variable=self._post_process_var, style="Dark.TCheckbutton"
-        ).pack(anchor="w", padx=24, pady=(0, 10))
+        self._post_process_cb = QCheckBox("Clean up text with LLM (fix punctuation, remove fillers)")
+        self._post_process_cb.setFont(QFont(_UI_FONT, 10))
+        self._post_process_cb.setChecked(self._settings.post_process)
+        form.addWidget(self._post_process_cb)
+        self._add_spacer(form)
+
+        # Vocabulary
+        self._add_field_label(form, "Custom Vocabulary")
+        vocab_hint = QLabel(
+            "One word or phrase per line. Added to the Whisper prompt\n"
+            "so they are always recognized correctly."
+        )
+        vocab_hint.setFont(QFont(_UI_FONT, 9))
+        vocab_hint.setStyleSheet("color: #888;")
+        form.addWidget(vocab_hint)
+        self._vocab_text = QTextEdit()
+        self._vocab_text.setFont(QFont(_UI_FONT, 10))
+        self._vocab_text.setFixedHeight(100)
+        existing_words = "\n".join(self._vocabulary.words) if self._vocabulary else ""
+        self._vocab_text.setPlainText(existing_words)
+        form.addWidget(self._vocab_text)
+        self._add_spacer(form)
 
         # --- Recording Section ---
-        self._add_section(scroll_frame, "Recording")
+        self._add_section(form, "Recording")
 
         # Microphone
-        self._add_field_label(scroll_frame, "Microphone")
-        self._device_var = tk.StringVar(value="Loading...")
-        self._device_combo = ttk.Combobox(
-            scroll_frame, textvariable=self._device_var, values=["Loading..."],
-            state="readonly", style="Dark.TCombobox", width=38
-        )
-        self._device_combo.pack(anchor="w", padx=24, pady=(0, 10))
+        self._add_field_label(form, "Microphone")
+        self._device_combo = self._add_combo(form, ["Loading..."], "Loading...")
         threading.Thread(target=self._load_devices, daemon=True).start()
 
         # Record Mode
-        self._add_field_label(scroll_frame, "Record Mode")
+        self._add_field_label(form, "Record Mode")
         mode_labels = list(RECORD_MODE_LABELS.values())
         current_mode = RECORD_MODE_LABELS.get(self._settings.record_mode, mode_labels[0])
-        self._mode_var = tk.StringVar(value=current_mode)
-        self._mode_combo = ttk.Combobox(
-            scroll_frame, textvariable=self._mode_var, values=mode_labels,
-            state="readonly", style="Dark.TCombobox", width=38
-        )
-        self._mode_combo.pack(anchor="w", padx=24, pady=(0, 10))
+        self._mode_combo = self._add_combo(form, mode_labels, current_mode)
 
         # Hotkey
-        self._add_field_label(scroll_frame, "Hotkey")
-        hotkey_frame = tk.Frame(scroll_frame, bg=BG)
-        hotkey_frame.pack(anchor="w", padx=24, pady=(0, 2))
-
+        self._add_field_label(form, "Hotkey")
+        hotkey_row = QHBoxLayout()
         current_hotkey_label = _combo_to_preset_label(self._settings.hotkey)
-        self._hotkey_var = tk.StringVar(value=current_hotkey_label)
-        self._hotkey_combo_widget = ttk.Combobox(
-            hotkey_frame, textvariable=self._hotkey_var,
-            values=HOTKEY_PRESET_LABELS,
-            state="readonly", style="Dark.TCombobox", width=28
-        )
-        self._hotkey_combo_widget.pack(side="left")
+        self._hotkey_combo = QComboBox()
+        self._hotkey_combo.addItems(HOTKEY_PRESET_LABELS)
+        self._hotkey_combo.setCurrentText(current_hotkey_label)
+        self._hotkey_combo.setMinimumWidth(250)
+        hotkey_row.addWidget(self._hotkey_combo)
 
-        self._test_btn = tk.Label(
-            hotkey_frame, text="  Test  ", bg=ACCENT, fg="#ffffff",
-            font=(_UI_FONT, 9), cursor="hand2", padx=8, pady=4
+        self._test_btn = QPushButton("  Test  ")
+        self._test_btn.setFont(QFont(_UI_FONT, 9))
+        self._test_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._test_btn.setStyleSheet(
+            "QPushButton { background-color: %s; color: white; border: none;"
+            " padding: 5px 12px; border-radius: 4px; }"
+            "QPushButton:hover { background-color: %s; }" % (ACCENT, ACCENT_HOVER)
         )
-        self._test_btn.pack(side="left", padx=(8, 0))
-        self._test_btn.bind("<Button-1>", lambda e: self._test_hotkey())
-        self._test_btn.bind("<Enter>", lambda e: self._test_btn.config(bg=ACCENT_HOVER))
-        self._test_btn.bind("<Leave>", lambda e: self._test_btn.config(bg=ACCENT))
+        self._test_btn.clicked.connect(self._test_hotkey)
+        hotkey_row.addWidget(self._test_btn)
+        hotkey_row.addStretch()
+        form.addLayout(hotkey_row)
 
-        self._hotkey_test_label = ttk.Label(
-            scroll_frame, text="", style="Dim.TLabel"
-        )
-        self._hotkey_test_label.pack(anchor="w", padx=24, pady=(0, 10))
+        self._hotkey_test_label = QLabel("")
+        self._hotkey_test_label.setObjectName("dim_label")
+        self._hotkey_test_label.setFont(QFont(_MONO_FONT, 10))
+        form.addWidget(self._hotkey_test_label)
+        self._add_spacer(form)
 
         # --- Application Section ---
-        self._add_section(scroll_frame, "Application")
+        self._add_section(form, "Application")
 
-        # Notifications
-        self._notif_var = tk.BooleanVar(value=self._settings.show_notifications)
-        ttk.Checkbutton(
-            scroll_frame, text="Show notifications", variable=self._notif_var,
-            style="Dark.TCheckbutton"
-        ).pack(anchor="w", padx=24, pady=(0, 6))
+        self._notif_cb = QCheckBox("Show notifications")
+        self._notif_cb.setFont(QFont(_UI_FONT, 10))
+        self._notif_cb.setChecked(self._settings.show_notifications)
+        form.addWidget(self._notif_cb)
 
-        # Restore clipboard
-        self._clipboard_var = tk.BooleanVar(value=self._settings.restore_clipboard)
-        ttk.Checkbutton(
-            scroll_frame, text="Restore clipboard after paste", variable=self._clipboard_var,
-            style="Dark.TCheckbutton"
-        ).pack(anchor="w", padx=24, pady=(0, 16))
+        self._clipboard_cb = QCheckBox("Restore clipboard after paste")
+        self._clipboard_cb.setFont(QFont(_UI_FONT, 10))
+        self._clipboard_cb.setChecked(self._settings.restore_clipboard)
+        form.addWidget(self._clipboard_cb)
 
-        # --- Buttons (outside scrollable area) ---
-        btn_frame = tk.Frame(self._window, bg=BG)
-        btn_frame.pack(side="bottom", fill="x", padx=16, pady=(8, 16))
+        form.addStretch()
+        scroll.setWidget(inner)
+        main_layout.addWidget(scroll)
 
-        save_btn = tk.Label(
-            btn_frame, text="  Save  ", bg=ACCENT, fg="#ffffff",
-            font=(_UI_FONT, 10, "bold"), cursor="hand2", padx=16, pady=6
+        # --- Buttons (fixed at bottom) ---
+        btn_frame = QWidget()
+        btn_frame.setStyleSheet("background-color: %s;" % BG)
+        btn_layout = QHBoxLayout(btn_frame)
+        btn_layout.setContentsMargins(16, 8, 16, 16)
+
+        btn_layout.addStretch()
+
+        cancel_btn = QPushButton("  Cancel  ")
+        cancel_btn.setFont(QFont(_UI_FONT, 10))
+        cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel_btn.setStyleSheet(
+            "QPushButton { background-color: %s; color: #ccc; border: none;"
+            " padding: 6px 16px; border-radius: 4px; }"
+            "QPushButton:hover { background-color: #666; }" % BTN_CANCEL_BG
         )
-        save_btn.pack(side="right", padx=(8, 0))
-        save_btn.bind("<Button-1>", lambda e: self._on_save_click())
-        save_btn.bind("<Enter>", lambda e: save_btn.config(bg=ACCENT_HOVER))
-        save_btn.bind("<Leave>", lambda e: save_btn.config(bg=ACCENT))
+        cancel_btn.clicked.connect(self._on_close)
+        btn_layout.addWidget(cancel_btn)
 
-        cancel_btn = tk.Label(
-            btn_frame, text="  Cancel  ", bg=BTN_CANCEL_BG, fg="#cccccc",
-            font=(_UI_FONT, 10), cursor="hand2", padx=16, pady=6
+        save_btn = QPushButton("  Save  ")
+        save_btn.setFont(QFont(_UI_FONT, 10, QFont.Weight.Bold))
+        save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        save_btn.setStyleSheet(
+            "QPushButton { background-color: %s; color: white; border: none;"
+            " padding: 6px 16px; border-radius: 4px; }"
+            "QPushButton:hover { background-color: %s; }" % (ACCENT, ACCENT_HOVER)
         )
-        cancel_btn.pack(side="right")
-        cancel_btn.bind("<Button-1>", lambda e: self._on_close())
-        cancel_btn.bind("<Enter>", lambda e: cancel_btn.config(bg="#666666"))
-        cancel_btn.bind("<Leave>", lambda e: cancel_btn.config(bg=BTN_CANCEL_BG))
+        save_btn.clicked.connect(self._on_save_click)
+        btn_layout.addWidget(save_btn)
 
+        main_layout.addWidget(btn_frame)
+
+        self.show()
         logger.info("Settings window opened")
 
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _add_section(layout: QVBoxLayout, text: str) -> None:
+        label = QLabel(text)
+        label.setObjectName("section_label")
+        label.setFont(QFont(_UI_FONT, 12, QFont.Weight.Bold))
+        layout.addWidget(label)
+
+    @staticmethod
+    def _add_field_label(layout: QVBoxLayout, text: str) -> None:
+        label = QLabel(text)
+        label.setFont(QFont(_UI_FONT, 10))
+        label.setContentsMargins(12, 0, 0, 0)
+        layout.addWidget(label)
+
+    @staticmethod
+    def _add_combo(layout: QVBoxLayout, items: list[str], current: str) -> QComboBox:
+        combo = QComboBox()
+        combo.addItems(items)
+        combo.setCurrentText(current)
+        combo.setMinimumWidth(320)
+        layout.addWidget(combo)
+        return combo
+
+    @staticmethod
+    def _add_spacer(layout: QVBoxLayout) -> None:
+        spacer = QWidget()
+        spacer.setFixedHeight(8)
+        spacer.setStyleSheet("background: transparent;")
+        layout.addWidget(spacer)
+
+    # ------------------------------------------------------------------
+    # Hotkey test (Qt-based, no pynput — avoids macOS SIGTRAP crash)
+    # ------------------------------------------------------------------
+
     def _test_hotkey(self) -> None:
-        """Test whether the selected hotkey preset is detectable."""
-        from pynput import keyboard as kb
-        from src.core.hotkey_manager import _parse_hotkey_keys, _pynput_key_to_id
+        combo_label = self._hotkey_combo.currentText()
 
-        combo_label = self._hotkey_var.get()
-        combo = _preset_label_to_combo(combo_label)
-        hotkey_keys = _parse_hotkey_keys(combo)
+        self._hotkey_test_label.setText(f"Press {combo_label} now...")
+        self._hotkey_test_label.setStyleSheet("color: %s;" % ACCENT)
+        self._test_btn.setEnabled(False)
+        self._test_btn.setText(" Testing... ")
 
-        self._hotkey_test_label.config(
-            text=f"Press {combo_label} now...", foreground=ACCENT
+        # Enable Qt key capture mode
+        self._testing_hotkey = True
+        self._test_combo_label = combo_label
+        self._test_target_keys = _combo_to_qt_keys(
+            _preset_label_to_combo(combo_label)
         )
-        self._test_btn.config(text=" Testing... ", bg="#666666")
-        self._test_btn.unbind("<Button-1>")
-
-        # Pause the app's hotkey listener during test
-        if self._hotkey_manager is not None:
-            self._hotkey_manager.pause()
-
-        self._test_detected = False
-        self._test_result_shown = False
-        pressed_keys: set[str] = set()
-
-        def on_press(key):
-            key_id = _pynput_key_to_id(key)
-            if not key_id:
-                return
-            pressed_keys.add(key_id)
-            if hotkey_keys.issubset(pressed_keys):
-                self._test_detected = True
-                if self._tk_root:
-                    self._tk_root.after(0, check_result)
-                return False  # Stop listener
-
-        def on_release(key):
-            key_id = _pynput_key_to_id(key)
-            if key_id:
-                pressed_keys.discard(key_id)
-
-        test_listener = kb.Listener(on_press=on_press, on_release=on_release)
-        test_listener.daemon = True
-        test_listener.start()
-
-        def check_result():
-            if self._test_result_shown or self._window is None:
-                return
-            self._test_result_shown = True
-            try:
-                test_listener.stop()
-            except Exception:
-                pass
-            # Resume the app's hotkey listener
-            if self._hotkey_manager is not None:
-                self._hotkey_manager.resume()
-            if self._test_detected:
-                self._hotkey_test_label.config(
-                    text=f"OK - {combo_label} detected!", foreground="#22c55e"
-                )
-            else:
-                self._hotkey_test_label.config(
-                    text="Not detected. Try another hotkey.", foreground="#ef4444"
-                )
-            self._test_btn.config(text="  Test  ", bg=ACCENT)
-            self._test_btn.bind("<Button-1>", lambda e: self._test_hotkey())
+        self._test_pressed_keys: set[int] = set()
+        self.setFocus()
+        self.grabKeyboard()
 
         # Timeout after 5 seconds
-        if self._tk_root:
-            self._tk_root.after(5000, check_result)
+        QTimer.singleShot(5000, self._finish_hotkey_test_timeout)
+
+    def _finish_hotkey_test_ok(self) -> None:
+        self._testing_hotkey = False
+        self.releaseKeyboard()
+        self._hotkey_test_label.setText(
+            f"OK - {self._test_combo_label} detected!"
+        )
+        self._hotkey_test_label.setStyleSheet("color: #22c55e;")
+        self._test_btn.setEnabled(True)
+        self._test_btn.setText("  Test  ")
+
+    def _finish_hotkey_test_timeout(self) -> None:
+        if not self._testing_hotkey:
+            return
+        self._testing_hotkey = False
+        self.releaseKeyboard()
+        self._hotkey_test_label.setText("Not detected. Try another hotkey.")
+        self._hotkey_test_label.setStyleSheet("color: #ef4444;")
+        self._test_btn.setEnabled(True)
+        self._test_btn.setText("  Test  ")
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if self._testing_hotkey:
+            self._test_pressed_keys.add(event.key())
+            if self._test_target_keys.issubset(self._test_pressed_keys):
+                self._finish_hotkey_test_ok()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event) -> None:  # noqa: N802
+        if self._testing_hotkey:
+            self._test_pressed_keys.discard(event.key())
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
+
+    # ------------------------------------------------------------------
+    # Provider changed
+    # ------------------------------------------------------------------
 
     def _on_provider_changed(self) -> None:
-        """Enable/disable model dropdown based on selected provider."""
-        provider_label = self._provider_var.get()
-        is_openai = provider_label == PROVIDER_LABELS["openai"]
+        if self._provider_combo is None or self._model_combo is None:
+            return
+        provider_label = self._provider_combo.currentText()
+        is_openai = provider_label == PROVIDER_LABELS.get("openai", "")
         if is_openai:
-            self._model_combo.configure(state="disabled")
-            self._model_hint.configure(text="OpenAI uses whisper-1 (fixed)")
+            self._model_combo.setEnabled(False)
+            if self._model_hint:
+                self._model_hint.setText("OpenAI uses whisper-1 (fixed)")
         else:
-            self._model_combo.configure(state="readonly")
-            self._model_hint.configure(text="")
+            self._model_combo.setEnabled(True)
+            if self._model_hint:
+                self._model_hint.setText("")
+
+    # ------------------------------------------------------------------
+    # Device loading
+    # ------------------------------------------------------------------
 
     def _load_devices(self) -> None:
-        """Load audio devices in a background thread, deduplicating by name."""
         try:
             all_devices = AudioRecorder.list_devices()
         except Exception as exc:
             logger.warning("Failed to list audio devices: %s", exc)
             all_devices = []
 
-        # Deduplicate: keep first occurrence of each device name
-        # (Windows exposes the same device via MME, DirectSound, WASAPI)
-        seen_names: set[str] = set()
+        # Deduplicate by name
+        seen: set[str] = set()
         self._devices = []
         for dev in all_devices:
-            name = dev["name"]
-            if name not in seen_names:
-                seen_names.add(name)
+            if dev["name"] not in seen:
+                seen.add(dev["name"])
                 self._devices.append(dev)
 
         # Find system default device
@@ -427,14 +571,12 @@ class SettingsWindow:
         except Exception:
             pass
 
-        # Build device list with active device promoted to top
         default_entry = None
         other_entries = []
         for dev in self._devices:
             label = dev["name"]
-            is_default = (label == default_marker)
             entry = f"{label} (#{dev['index']})"
-            if is_default:
+            if label == default_marker:
                 default_entry = f"* {label} [active] (#{dev['index']})"
             else:
                 other_entries.append(entry)
@@ -455,107 +597,98 @@ class SettingsWindow:
                         current = f"{label} (#{dev['index']})"
                     break
 
-        if self._tk_root is not None:
-            try:
-                self._tk_root.after(0, self._update_device_dropdown, device_names, current)
-            except Exception:
-                pass
+        # Marshal to Qt thread
+        QTimer.singleShot(0, lambda: self._update_device_dropdown(device_names, current))
 
-    def _update_device_dropdown(self, device_names: list[str], current: str) -> None:
+    def _update_device_dropdown(self, names: list[str], current: str) -> None:
         if self._device_combo is not None:
-            self._device_combo.configure(values=device_names)
-            self._device_var.set(current)
+            self._device_combo.clear()
+            self._device_combo.addItems(names)
+            self._device_combo.setCurrentText(current)
+
+    # ------------------------------------------------------------------
+    # Save / Close
+    # ------------------------------------------------------------------
 
     def _on_save_click(self) -> None:
-        """Read UI values, update settings, persist, and close."""
         # Language
-        lang_label = self._lang_var.get()
+        lang_label = self._lang_combo.currentText()
         self._settings.language = LANGUAGE_OPTIONS.get(lang_label, "fr")
 
         # Provider
-        provider_label = self._provider_var.get()
+        provider_label = self._provider_combo.currentText()
         for code, label in PROVIDER_LABELS.items():
             if label == provider_label:
                 self._settings.primary_provider = code
                 break
 
         # Model
-        model_label = self._model_var.get()
+        model_label = self._model_combo.currentText()
         for code, label in MODEL_LABELS.items():
             if label == model_label:
                 self._settings.whisper_model = code
                 break
 
         # Prompt
-        self._settings.prompt = self._prompt_text.get("1.0", "end").strip()
+        self._settings.prompt = self._prompt_text.toPlainText().strip()
 
         # Post-process
-        self._settings.post_process = self._post_process_var.get()
+        self._settings.post_process = self._post_process_cb.isChecked()
 
-        # Device (match by index number in the label)
-        device_label = self._device_var.get()
-        if device_label == "System Default" or device_label == "Loading...":
+        # Vocabulary
+        if self._vocabulary is not None and self._vocab_text is not None:
+            raw = self._vocab_text.toPlainText()
+            words = [w.strip() for w in raw.splitlines() if w.strip()]
+            self._vocabulary.set_words(words)
+
+        # Device
+        device_label = self._device_combo.currentText()
+        if device_label in ("System Default", "Loading..."):
             self._settings.input_device = None
         else:
-            import re
             idx_match = re.search(r"#(\d+)\)$", device_label)
-            if idx_match:
-                self._settings.input_device = int(idx_match.group(1))
-            else:
-                self._settings.input_device = None
+            self._settings.input_device = int(idx_match.group(1)) if idx_match else None
 
         # Record Mode
-        mode_label = self._mode_var.get()
+        mode_label = self._mode_combo.currentText()
         for code, label in RECORD_MODE_LABELS.items():
             if label == mode_label:
                 self._settings.record_mode = code
                 break
 
         # Hotkey
-        hotkey_label = self._hotkey_var.get()
+        hotkey_label = self._hotkey_combo.currentText()
         self._settings.hotkey = _preset_label_to_combo(hotkey_label)
 
         # App toggles
-        self._settings.show_notifications = self._notif_var.get()
-        self._settings.restore_clipboard = self._clipboard_var.get()
+        self._settings.show_notifications = self._notif_cb.isChecked()
+        self._settings.restore_clipboard = self._clipboard_cb.isChecked()
 
-        # Persist to disk
+        # Persist
         self._settings.save()
         logger.info("Settings saved to %s", self._settings.config_path())
 
-        # Notify app
         if self._on_save:
             self._on_save(self._settings)
 
         self._on_close()
 
     def _on_close(self) -> None:
-        """Close the settings window."""
         self._is_open = False
-        if self._window is not None:
-            try:
-                self._window.unbind_all("<MouseWheel>")
-                self._window.destroy()
-            except Exception:
-                pass
-            self._window = None
+        self.hide()
         logger.info("Settings window closed")
 
-    @staticmethod
-    def _add_section(parent: ttk.Frame, text: str) -> None:
-        ttk.Label(parent, text=text, style="Section.TLabel").pack(
-            anchor="w", padx=12, pady=(16, 6)
-        )
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self._on_close()
+        event.accept()
 
-    @staticmethod
-    def _add_field_label(parent: ttk.Frame, text: str) -> None:
-        ttk.Label(parent, text=text, style="Dark.TLabel").pack(
-            anchor="w", padx=24, pady=(0, 4)
-        )
+
+# ------------------------------------------------------------------
+# Utility functions
+# ------------------------------------------------------------------
 
 
 def _code_to_label(code: str, mapping: dict[str, str]) -> str:
-    """Convert a code value to its display label."""
     for label, c in mapping.items():
         if c == code:
             return label
@@ -563,20 +696,54 @@ def _code_to_label(code: str, mapping: dict[str, str]) -> str:
 
 
 def _combo_to_preset_label(combo: str) -> str:
-    """Find the display label for a hotkey combo, or format it if not a preset."""
     for code, label in HOTKEY_PRESETS.items():
         if code == combo:
             return label
-    # Fallback for legacy/unknown combos
     return combo.replace("<", "").replace(">", "").replace("+", " + ").title()
 
 
 def _preset_label_to_combo(label: str) -> str:
-    """Reverse lookup: display label -> pynput combo string."""
     for code, lbl in HOTKEY_PRESETS.items():
         if lbl == label:
             return code
-    # Fallback to default
+    return "<cmd>+<shift>+<space>" if _IS_MAC else "<ctrl>+<shift>+<space>"
+
+
+def _combo_to_qt_keys(combo: str) -> set[int]:
+    """Convert a pynput-style combo string to a set of Qt key codes.
+
+    On macOS, Qt swaps Control and Meta: Qt Key_Control = Command,
+    Qt Key_Meta = Control. We must account for this so the test
+    matches the same physical keys as the Quartz hotkey listener.
+    """
+    from PyQt6.QtCore import Qt as QtKey
+
     if _IS_MAC:
-        return "<cmd>+<shift>+<space>"
-    return "<ctrl>+<shift>+<space>"
+        _ctrl_key = QtKey.Key.Key_Meta       # physical Control on macOS
+        _cmd_key = QtKey.Key.Key_Control      # physical Command on macOS
+    else:
+        _ctrl_key = QtKey.Key.Key_Control
+        _cmd_key = QtKey.Key.Key_Meta
+
+    _MAP = {
+        "<ctrl>": _ctrl_key,
+        "<shift>": QtKey.Key.Key_Shift,
+        "<alt>": QtKey.Key.Key_Alt,
+        "<cmd>": _cmd_key,
+        "<space>": QtKey.Key.Key_Space,
+        "<f7>": QtKey.Key.Key_F7,
+        "<f8>": QtKey.Key.Key_F8,
+        "<f9>": QtKey.Key.Key_F9,
+        "<f10>": QtKey.Key.Key_F10,
+        "<f11>": QtKey.Key.Key_F11,
+        "<f12>": QtKey.Key.Key_F12,
+    }
+
+    keys: set[int] = set()
+    for part in combo.split("+"):
+        part = part.strip().lower()
+        if part in _MAP:
+            keys.add(_MAP[part].value)
+        elif len(part) == 1:
+            keys.add(ord(part.upper()))
+    return keys

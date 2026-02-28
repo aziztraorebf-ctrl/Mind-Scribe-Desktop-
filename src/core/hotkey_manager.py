@@ -1,11 +1,12 @@
-"""Global hotkey management using pynput.
+"""Global hotkey management.
+
+Uses Quartz CGEventTap on macOS (avoids pynput SIGTRAP crash from
+TSMGetInputSourceProperty on background thread) and pynput
+keyboard.Listener on other platforms.
 
 Supports two modes:
 - Toggle: press hotkey to start, press again to stop
 - Hold: hold hotkey to record, release to stop
-
-Both modes use keyboard.Listener with subset matching, which supports
-any key combination including single keys (F9, Home, etc.).
 """
 
 import logging
@@ -14,9 +15,12 @@ import threading
 import time
 from typing import Callable
 
-from pynput import keyboard
-
 logger = logging.getLogger(__name__)
+
+_IS_MACOS = platform.system() == "Darwin"
+
+if not _IS_MACOS:
+    from pynput import keyboard
 
 # Minimum hold duration (seconds) to avoid accidental triggers on quick taps
 _MIN_HOLD_DURATION = 0.3
@@ -48,8 +52,7 @@ _MODIFIER_NORMALIZE = {
 def _pynput_key_to_id(key) -> str:
     """Convert a pynput key event to a comparable string identifier.
 
-    Normalizes left/right modifier variants (ctrl_l -> ctrl, etc.)
-    so they match the combo strings used in presets.
+    Only used on non-macOS platforms where pynput is the backend.
     """
     if isinstance(key, keyboard.Key):
         name = _MODIFIER_NORMALIZE.get(key.name, key.name)
@@ -90,7 +93,7 @@ class HotkeyManager:
         self._on_hold_stop = on_hold_stop
         self._hotkey_combo = hotkey_combo
         self._mode = mode  # "toggle" or "hold"
-        self._listener: keyboard.Listener | None = None
+        self._listener = None  # QuartzHotkeyListener or pynput Listener
         self._running = False
 
         # Key tracking state (shared by both modes)
@@ -128,42 +131,74 @@ class HotkeyManager:
             self._pressed_keys.clear()
             self._holding = False
             self._toggle_pressed = False
-            self._listener = keyboard.Listener(
-                on_press=self._on_key_press,
-                on_release=self._on_key_release,
-            )
-            self._listener.daemon = True
-            self._listener.start()
+
+            if _IS_MACOS:
+                self._start_quartz()
+            else:
+                self._start_pynput()
+
             self._running = True
-            logger.info("Hotkey listener started: %s (mode=%s)", self.hotkey_display, self._mode)
+            logger.info(
+                "Hotkey listener started: %s (mode=%s)",
+                self.hotkey_display,
+                self._mode,
+            )
 
         except Exception as exc:
-            logger.error("Failed to start hotkey listener for '%s': %s", self._hotkey_combo, exc)
+            logger.error(
+                "Failed to start hotkey listener for '%s': %s",
+                self._hotkey_combo,
+                exc,
+            )
             self._listener = None
             self._running = False
+            self._try_fallback()
 
-            # Fallback to default hotkey if the current one fails
-            default = self.default_hotkey()
-            if self._hotkey_combo != default:
-                logger.info("Falling back to default hotkey: %s", default)
-                self._hotkey_combo = default
-                self._hotkey_keys = _parse_hotkey_keys(default)
-                try:
-                    self._pressed_keys.clear()
-                    self._holding = False
-                    self._toggle_pressed = False
-                    self._listener = keyboard.Listener(
-                        on_press=self._on_key_press,
-                        on_release=self._on_key_release,
-                    )
-                    self._listener.daemon = True
-                    self._listener.start()
-                    self._running = True
-                    logger.info("Hotkey listener started with fallback: %s", self.hotkey_display)
-                except Exception as fallback_exc:
-                    logger.error("Fallback hotkey also failed: %s", fallback_exc)
-                    self._listener = None
-                    self._running = False
+    def _start_quartz(self) -> None:
+        """Start macOS Quartz CGEventTap listener."""
+        from src.core.quartz_hotkey import QuartzHotkeyListener
+
+        self._listener = QuartzHotkeyListener(
+            on_press=self._handle_press,
+            on_release=self._handle_release,
+        )
+        self._listener.start()
+
+    def _start_pynput(self) -> None:
+        """Start pynput keyboard Listener (non-macOS)."""
+        self._listener = keyboard.Listener(
+            on_press=self._on_pynput_press,
+            on_release=self._on_pynput_release,
+        )
+        self._listener.daemon = True
+        self._listener.start()
+
+    def _try_fallback(self) -> None:
+        """Fall back to default hotkey if the current one failed."""
+        default = self.default_hotkey()
+        if self._hotkey_combo != default:
+            logger.info("Falling back to default hotkey: %s", default)
+            self._hotkey_combo = default
+            self._hotkey_keys = _parse_hotkey_keys(default)
+            try:
+                self._pressed_keys.clear()
+                self._holding = False
+                self._toggle_pressed = False
+
+                if _IS_MACOS:
+                    self._start_quartz()
+                else:
+                    self._start_pynput()
+
+                self._running = True
+                logger.info(
+                    "Hotkey listener started with fallback: %s",
+                    self.hotkey_display,
+                )
+            except Exception as fallback_exc:
+                logger.error("Fallback hotkey also failed: %s", fallback_exc)
+                self._listener = None
+                self._running = False
 
     def stop(self) -> None:
         """Stop listening for hotkeys."""
@@ -195,7 +230,9 @@ class HotkeyManager:
         if not self._running:
             self.start()
 
-    def update(self, new_combo: str | None = None, new_mode: str | None = None) -> None:
+    def update(
+        self, new_combo: str | None = None, new_mode: str | None = None
+    ) -> None:
         """Update hotkey combo and/or mode in a single restart."""
         was_running = self._running
         self.stop()
@@ -211,11 +248,12 @@ class HotkeyManager:
         """Change the hotkey combination. Restarts the listener."""
         self.update(new_combo=new_combo)
 
-    # -- Key event handlers (both modes) --
+    # ------------------------------------------------------------------ #
+    # Key event handlers (shared by Quartz and pynput backends)
+    # ------------------------------------------------------------------ #
 
-    def _on_key_press(self, key) -> None:
-        """Track pressed keys and trigger hotkey for both modes."""
-        key_id = _pynput_key_to_id(key)
+    def _handle_press(self, key_id: str) -> None:
+        """Handle key press with normalized key_id string."""
         if not key_id:
             return
         self._pressed_keys.add(key_id)
@@ -224,20 +262,25 @@ class HotkeyManager:
             if self._mode == "toggle":
                 if not self._toggle_pressed:
                     self._toggle_pressed = True
-                    logger.debug("Hotkey triggered (toggle): %s", self.hotkey_display)
+                    logger.debug(
+                        "Hotkey triggered (toggle): %s", self.hotkey_display
+                    )
                     if self._on_toggle:
-                        threading.Thread(target=self._on_toggle, daemon=True).start()
+                        threading.Thread(
+                            target=self._on_toggle, daemon=True
+                        ).start()
             elif self._mode == "hold":
                 if not self._holding:
                     self._holding = True
                     self._hold_start_time = time.monotonic()
                     logger.debug("Hold started: %s", self.hotkey_display)
                     if self._on_hold_start:
-                        threading.Thread(target=self._on_hold_start, daemon=True).start()
+                        threading.Thread(
+                            target=self._on_hold_start, daemon=True
+                        ).start()
 
-    def _on_key_release(self, key) -> None:
-        """Track key releases for both modes."""
-        key_id = _pynput_key_to_id(key)
+    def _handle_release(self, key_id: str) -> None:
+        """Handle key release with normalized key_id string."""
         if not key_id:
             return
         self._pressed_keys.discard(key_id)
@@ -249,11 +292,31 @@ class HotkeyManager:
                 held_duration = time.monotonic() - self._hold_start_time
                 self._holding = False
                 if held_duration >= _MIN_HOLD_DURATION:
-                    logger.debug("Hold released after %.1fs: %s", held_duration, self.hotkey_display)
+                    logger.debug(
+                        "Hold released after %.1fs: %s",
+                        held_duration,
+                        self.hotkey_display,
+                    )
                     if self._on_hold_stop:
-                        threading.Thread(target=self._on_hold_stop, daemon=True).start()
+                        threading.Thread(
+                            target=self._on_hold_stop, daemon=True
+                        ).start()
                 else:
-                    logger.debug("Hold too short (%.2fs), ignored", held_duration)
+                    logger.debug(
+                        "Hold too short (%.2fs), ignored", held_duration
+                    )
+
+    # ------------------------------------------------------------------ #
+    # pynput adapters (non-macOS only)
+    # ------------------------------------------------------------------ #
+
+    def _on_pynput_press(self, key) -> None:
+        """Convert pynput key to key_id and delegate."""
+        self._handle_press(_pynput_key_to_id(key))
+
+    def _on_pynput_release(self, key) -> None:
+        """Convert pynput key to key_id and delegate."""
+        self._handle_release(_pynput_key_to_id(key))
 
     @staticmethod
     def default_hotkey() -> str:

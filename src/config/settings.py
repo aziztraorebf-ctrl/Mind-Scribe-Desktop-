@@ -40,9 +40,11 @@ class Settings:
     # Transcription
     language: str = "fr"  # ISO-639-1 code
     prompt: str = (
-        "Transcription fidele d'un developpeur logiciel francophone. "
+        "Transcription fidele d'un developpeur logiciel francophone canadien. "
         "Termes techniques courants: API, backend, frontend, deploy, commit, "
-        "merge, pull request, database, endpoint, webhook, cloud, container."
+        "merge, pull request, database, endpoint, webhook, cloud, container, "
+        "Groq, Whisper, Remotion, Supabase, Netlify, GitHub, VSCode, Python, "
+        "TypeScript, React, Next.js, Kimi, Gemini, Claude, MindScribe, Wispr Flow."
     )
     post_process: bool = False  # Clean up transcription via LLM
 
