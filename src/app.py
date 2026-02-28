@@ -250,9 +250,9 @@ class MindScribeApp:
 
     def _on_hotkey_toggle(self) -> None:
         """Handle hotkey press - toggle between recording and idle."""
-        self._capture_previous_app()  # BEFORE lock/state check
         with self._lock:
             if self._state == AppState.IDLE:
+                self._capture_previous_app()
                 self._start_recording()
             elif self._state in (AppState.RECORDING, AppState.PAUSED):
                 self._stop_and_transcribe()
@@ -260,9 +260,9 @@ class MindScribeApp:
 
     def _on_hold_start(self) -> None:
         """Handle hotkey hold start - begin recording."""
-        self._capture_previous_app()  # BEFORE lock/state check
         with self._lock:
             if self._state == AppState.IDLE:
+                self._capture_previous_app()
                 self._start_recording()
 
     def _on_hold_stop(self) -> None:
@@ -398,14 +398,23 @@ class MindScribeApp:
             # activateWithOptions_ from a background thread is non-deterministic.
             if _IS_MACOS and self._previous_app is not None:
                 try:
-                    app_name = self._previous_app.localizedName()
+                    bundle_id = self._previous_app.bundleIdentifier() or ""
+                    app_name = self._previous_app.localizedName() or ""
                     import subprocess
-                    subprocess.run(
-                        ["osascript", "-e", f'tell application "{app_name}" to activate'],
-                        capture_output=True,
-                        timeout=3,
-                    )
-                    logger.debug("Reactivated previous app via osascript: %s", app_name)
+                    if bundle_id:
+                        script = f'tell application id "{bundle_id}" to activate'
+                    elif app_name:
+                        safe_name = app_name.replace('"', '\\"')
+                        script = f'tell application "{safe_name}" to activate'
+                    else:
+                        script = None
+                    if script:
+                        subprocess.run(
+                            ["osascript", "-e", script],
+                            capture_output=True,
+                            timeout=3,
+                        )
+                        logger.debug("Reactivated previous app via osascript: %s", app_name or bundle_id)
                 except Exception as exc:
                     logger.warning("Failed to reactivate previous app: %s", exc)
 
