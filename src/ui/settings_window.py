@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
 
 from src.config.settings import Settings
 from src.core.audio_recorder import AudioRecorder
+from src.core.vocabulary_store import VocabularyStore
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,7 @@ HOTKEY_PRESETS = {
     "<f8>": "F8",
     "<f7>": "F7",
     f"{_MOD}+<alt>+<space>": f"{_MOD_LABEL} + Alt + Space",
+    f"{_MOD}+<alt>": f"{_MOD_LABEL} + Alt",
 }
 HOTKEY_PRESET_LABELS = list(HOTKEY_PRESETS.values())
 
@@ -173,6 +175,7 @@ class SettingsWindow(QWidget):
         self,
         settings: Settings,
         on_save: Callable[[Settings], None] | None = None,
+        vocabulary: VocabularyStore | None = None,
     ) -> None:
         super().__init__()
         self._settings = settings
@@ -180,7 +183,10 @@ class SettingsWindow(QWidget):
         self._is_open = False
         self._devices: list[dict] = []
         self._hotkey_manager = None
-        self._test_listener = None
+        self._testing_hotkey = False
+        self._test_combo_label = ""
+        self._test_target_keys: set[int] = set()
+        self._test_pressed_keys: set[int] = set()
 
         # UI widget references (populated in _build_window)
         self._lang_combo: QComboBox | None = None
@@ -189,6 +195,8 @@ class SettingsWindow(QWidget):
         self._model_hint: QLabel | None = None
         self._prompt_text: QTextEdit | None = None
         self._post_process_cb: QCheckBox | None = None
+        self._vocabulary = vocabulary
+        self._vocab_text: QTextEdit | None = None
         self._device_combo: QComboBox | None = None
         self._mode_combo: QComboBox | None = None
         self._hotkey_combo: QComboBox | None = None
@@ -307,6 +315,23 @@ class SettingsWindow(QWidget):
         self._post_process_cb.setFont(QFont(_UI_FONT, 10))
         self._post_process_cb.setChecked(self._settings.post_process)
         form.addWidget(self._post_process_cb)
+        self._add_spacer(form)
+
+        # Vocabulary
+        self._add_field_label(form, "Custom Vocabulary")
+        vocab_hint = QLabel(
+            "One word or phrase per line. Added to the Whisper prompt\n"
+            "so they are always recognized correctly."
+        )
+        vocab_hint.setFont(QFont(_UI_FONT, 9))
+        vocab_hint.setStyleSheet("color: #888;")
+        form.addWidget(vocab_hint)
+        self._vocab_text = QTextEdit()
+        self._vocab_text.setFont(QFont(_UI_FONT, 10))
+        self._vocab_text.setFixedHeight(100)
+        existing_words = "\n".join(self._vocabulary.words) if self._vocabulary else ""
+        self._vocab_text.setPlainText(existing_words)
+        form.addWidget(self._vocab_text)
         self._add_spacer(form)
 
         # --- Recording Section ---
@@ -439,74 +464,65 @@ class SettingsWindow(QWidget):
         layout.addWidget(spacer)
 
     # ------------------------------------------------------------------
-    # Hotkey test
+    # Hotkey test (Qt-based, no pynput — avoids macOS SIGTRAP crash)
     # ------------------------------------------------------------------
 
     def _test_hotkey(self) -> None:
-        from pynput import keyboard as kb
-        from src.core.hotkey_manager import _parse_hotkey_keys, _pynput_key_to_id
-
         combo_label = self._hotkey_combo.currentText()
-        combo = _preset_label_to_combo(combo_label)
-        hotkey_keys = _parse_hotkey_keys(combo)
 
         self._hotkey_test_label.setText(f"Press {combo_label} now...")
         self._hotkey_test_label.setStyleSheet("color: %s;" % ACCENT)
         self._test_btn.setEnabled(False)
         self._test_btn.setText(" Testing... ")
 
-        # Pause the app's hotkey listener during test
-        if self._hotkey_manager is not None:
-            self._hotkey_manager.pause()
-
-        test_detected = False
-        result_shown = False
-        pressed_keys: set[str] = set()
-
-        def on_press(key):
-            nonlocal test_detected
-            key_id = _pynput_key_to_id(key)
-            if not key_id:
-                return
-            pressed_keys.add(key_id)
-            if hotkey_keys.issubset(pressed_keys):
-                test_detected = True
-                QTimer.singleShot(0, check_result)
-                return False  # Stop listener
-
-        def on_release(key):
-            key_id = _pynput_key_to_id(key)
-            if key_id:
-                pressed_keys.discard(key_id)
-
-        self._test_listener = kb.Listener(on_press=on_press, on_release=on_release)
-        self._test_listener.daemon = True
-        self._test_listener.start()
-
-        def check_result():
-            nonlocal result_shown
-            if result_shown:
-                return
-            result_shown = True
-            try:
-                if self._test_listener is not None:
-                    self._test_listener.stop()
-            except Exception:
-                pass
-            # Resume the app's hotkey listener
-            if self._hotkey_manager is not None:
-                self._hotkey_manager.resume()
-            if test_detected:
-                self._hotkey_test_label.setText(f"OK - {combo_label} detected!")
-                self._hotkey_test_label.setStyleSheet("color: #22c55e;")
-            else:
-                self._hotkey_test_label.setText("Not detected. Try another hotkey.")
-                self._hotkey_test_label.setStyleSheet("color: #ef4444;")
-            self._test_btn.setEnabled(True)
-            self._test_btn.setText("  Test  ")
+        # Enable Qt key capture mode
+        self._testing_hotkey = True
+        self._test_combo_label = combo_label
+        self._test_target_keys = _combo_to_qt_keys(
+            _preset_label_to_combo(combo_label)
+        )
+        self._test_pressed_keys: set[int] = set()
+        self.setFocus()
+        self.grabKeyboard()
 
         # Timeout after 5 seconds
-        QTimer.singleShot(5000, check_result)
+        QTimer.singleShot(5000, self._finish_hotkey_test_timeout)
+
+    def _finish_hotkey_test_ok(self) -> None:
+        self._testing_hotkey = False
+        self.releaseKeyboard()
+        self._hotkey_test_label.setText(
+            f"OK - {self._test_combo_label} detected!"
+        )
+        self._hotkey_test_label.setStyleSheet("color: #22c55e;")
+        self._test_btn.setEnabled(True)
+        self._test_btn.setText("  Test  ")
+
+    def _finish_hotkey_test_timeout(self) -> None:
+        if not self._testing_hotkey:
+            return
+        self._testing_hotkey = False
+        self.releaseKeyboard()
+        self._hotkey_test_label.setText("Not detected. Try another hotkey.")
+        self._hotkey_test_label.setStyleSheet("color: #ef4444;")
+        self._test_btn.setEnabled(True)
+        self._test_btn.setText("  Test  ")
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if self._testing_hotkey:
+            self._test_pressed_keys.add(event.key())
+            if self._test_target_keys.issubset(self._test_pressed_keys):
+                self._finish_hotkey_test_ok()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event) -> None:  # noqa: N802
+        if self._testing_hotkey:
+            self._test_pressed_keys.discard(event.key())
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
 
     # ------------------------------------------------------------------
     # Provider changed
@@ -619,6 +635,12 @@ class SettingsWindow(QWidget):
         # Post-process
         self._settings.post_process = self._post_process_cb.isChecked()
 
+        # Vocabulary
+        if self._vocabulary is not None and self._vocab_text is not None:
+            raw = self._vocab_text.toPlainText()
+            words = [w.strip() for w in raw.splitlines() if w.strip()]
+            self._vocabulary.set_words(words)
+
         # Device
         device_label = self._device_combo.currentText()
         if device_label in ("System Default", "Loading..."):
@@ -685,3 +707,43 @@ def _preset_label_to_combo(label: str) -> str:
         if lbl == label:
             return code
     return "<cmd>+<shift>+<space>" if _IS_MAC else "<ctrl>+<shift>+<space>"
+
+
+def _combo_to_qt_keys(combo: str) -> set[int]:
+    """Convert a pynput-style combo string to a set of Qt key codes.
+
+    On macOS, Qt swaps Control and Meta: Qt Key_Control = Command,
+    Qt Key_Meta = Control. We must account for this so the test
+    matches the same physical keys as the Quartz hotkey listener.
+    """
+    from PyQt6.QtCore import Qt as QtKey
+
+    if _IS_MAC:
+        _ctrl_key = QtKey.Key.Key_Meta       # physical Control on macOS
+        _cmd_key = QtKey.Key.Key_Control      # physical Command on macOS
+    else:
+        _ctrl_key = QtKey.Key.Key_Control
+        _cmd_key = QtKey.Key.Key_Meta
+
+    _MAP = {
+        "<ctrl>": _ctrl_key,
+        "<shift>": QtKey.Key.Key_Shift,
+        "<alt>": QtKey.Key.Key_Alt,
+        "<cmd>": _cmd_key,
+        "<space>": QtKey.Key.Key_Space,
+        "<f7>": QtKey.Key.Key_F7,
+        "<f8>": QtKey.Key.Key_F8,
+        "<f9>": QtKey.Key.Key_F9,
+        "<f10>": QtKey.Key.Key_F10,
+        "<f11>": QtKey.Key.Key_F11,
+        "<f12>": QtKey.Key.Key_F12,
+    }
+
+    keys: set[int] = set()
+    for part in combo.split("+"):
+        part = part.strip().lower()
+        if part in _MAP:
+            keys.add(_MAP[part].value)
+        elif len(part) == 1:
+            keys.add(ord(part.upper()))
+    return keys

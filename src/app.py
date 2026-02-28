@@ -92,6 +92,7 @@ class MindScribeApp:
         self.settings_window = SettingsWindow(
             settings=self.settings,
             on_save=self._on_settings_saved,
+            vocabulary=self.vocabulary,
         )
         self.settings_window.set_hotkey_manager(self.hotkey_manager)
 
