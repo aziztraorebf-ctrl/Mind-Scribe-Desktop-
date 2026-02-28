@@ -15,7 +15,9 @@ from src.core.chunker import prepare_audio
 from src.core.hotkey_manager import HotkeyManager
 from src.core.text_inserter import insert_text
 from src.core.transcriber import Transcriber, TranscriptionError
-from src.ui.history_window import HistoryWindow
+from src.core.history_store import HistoryStore
+from src.core.style_store import StyleStore
+from src.ui.dashboard import Dashboard
 from src.ui.notification import notify
 from src.ui.overlay import RecordingOverlay
 from src.ui.sounds import play_ready, play_record_start, play_record_stop
@@ -73,14 +75,25 @@ class MindScribeApp:
             mode=self.settings.record_mode,
         )
 
-        # Transcription history
-        self.history_window = HistoryWindow()
+        # Data stores
+        self.history_store = HistoryStore()
+        self.style_store = StyleStore()
+
+        # Dashboard window
+        self.dashboard = Dashboard(
+            history_store=self.history_store,
+            style_store=self.style_store,
+            vocabulary=self.vocabulary,
+            settings=self.settings,
+            on_style_change=self._on_style_change,
+            on_settings_save=self._on_settings_saved,
+        )
 
         # System tray
         self.tray = TrayIcon(
             on_toggle=self._on_hotkey_toggle,
             on_settings=self._open_settings,
-            on_history=self._open_history,
+            on_dashboard=self._open_dashboard,
             on_quit=self._request_quit,
             hotkey_display=self.hotkey_manager.hotkey_display,
         )
@@ -95,6 +108,7 @@ class MindScribeApp:
             vocabulary=self.vocabulary,
         )
         self.settings_window.set_hotkey_manager(self.hotkey_manager)
+        self.dashboard.set_hotkey_manager(self.hotkey_manager)
 
         # Connect overlay to audio recorder for real-time levels
         self.overlay.set_audio_source(
@@ -112,6 +126,33 @@ class MindScribeApp:
         self.on_transcription_done: callable | None = None
         self.on_error: callable | None = None
         self.on_quit_request: callable | None = None
+
+    def _capture_previous_app(self) -> None:
+        """Snapshot the current frontmost non-MindScribe app.
+
+        Called from hotkey callbacks BEFORE any UI change (overlay show, etc.)
+        so we always capture the real user app, not our own window.
+        """
+        if not _IS_MACOS:
+            return
+        try:
+            from AppKit import NSWorkspace
+            candidate = NSWorkspace.sharedWorkspace().frontmostApplication()
+            if candidate is None:
+                return
+            name = candidate.localizedName() or ""
+            bundle = candidate.bundleIdentifier() or ""
+            if "MindScribe" in name or bundle.startswith("com.mindscribe"):
+                logger.debug(
+                    "frontmost app is MindScribe (%s), keeping previous: %s",
+                    name,
+                    self._previous_app.localizedName() if self._previous_app else "None",
+                )
+                return
+            self._previous_app = candidate
+            logger.info("Captured previous app: %s", name)
+        except Exception as exc:
+            logger.warning("Could not capture previous app: %s", exc)
 
     def _effective_prompt(self) -> str:
         return self.settings.prompt + self.vocabulary.build_prompt_suffix()
@@ -161,9 +202,20 @@ class MindScribeApp:
         """Open the settings window."""
         self.settings_window.open()
 
-    def _open_history(self) -> None:
-        """Open the transcription history window."""
-        self.history_window.open()
+    def _open_dashboard(self) -> None:
+        """Open the dashboard window."""
+        self.dashboard.open()
+
+    def _on_style_change(self, style_name: str, prompt: str) -> None:
+        """Handle style change from the dashboard."""
+        self.settings.active_style = style_name
+        self.settings.save()
+        if prompt:
+            self.transcriber.prompt = prompt + " " + self._effective_prompt()
+        else:
+            self.transcriber.prompt = self._effective_prompt()
+        self.tray.update_style_display(style_name)
+        logger.info("Active style changed to: %s", style_name)
 
     def _on_settings_saved(self, settings: Settings) -> None:
         """Apply updated settings to live components."""
@@ -198,6 +250,7 @@ class MindScribeApp:
 
     def _on_hotkey_toggle(self) -> None:
         """Handle hotkey press - toggle between recording and idle."""
+        self._capture_previous_app()  # BEFORE lock/state check
         with self._lock:
             if self._state == AppState.IDLE:
                 self._start_recording()
@@ -207,6 +260,7 @@ class MindScribeApp:
 
     def _on_hold_start(self) -> None:
         """Handle hotkey hold start - begin recording."""
+        self._capture_previous_app()  # BEFORE lock/state check
         with self._lock:
             if self._state == AppState.IDLE:
                 self._start_recording()
@@ -255,14 +309,10 @@ class MindScribeApp:
 
     def _start_recording(self) -> None:
         """Begin recording audio."""
-        # Save the frontmost app BEFORE showing overlay (which activates MindScribe)
-        if _IS_MACOS:
-            try:
-                from AppKit import NSWorkspace
-                self._previous_app = NSWorkspace.sharedWorkspace().frontmostApplication()
-                logger.debug("Saved previous app: %s", self._previous_app.localizedName())
-            except Exception:
-                self._previous_app = None
+        if self._previous_app:
+            logger.info("Recording will return to: %s", self._previous_app.localizedName())
+        else:
+            logger.warning("No previous app captured — text may not be inserted correctly.")
         self._set_state(AppState.RECORDING)
         self.tray.set_recording()
         self.overlay.show_recording()
@@ -369,7 +419,7 @@ class MindScribeApp:
             )
 
             # Store in history
-            self.history_window.add_entry(full_text)
+            self.history_store.add(full_text, duration_seconds=self.recorder.duration_seconds)
 
             logger.info("Transcription complete: %d chars", len(full_text))
             if self.settings.show_notifications:
