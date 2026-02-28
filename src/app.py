@@ -15,6 +15,7 @@ from src.core.chunker import prepare_audio
 from src.core.hotkey_manager import HotkeyManager
 from src.core.text_inserter import insert_text
 from src.core.transcriber import Transcriber, TranscriptionError
+from PyQt6.QtCore import QTimer
 from src.ui.history_window import HistoryWindow
 from src.ui.notification import notify
 from src.ui.overlay import RecordingOverlay
@@ -344,26 +345,31 @@ class MindScribeApp:
             self.overlay.hide()
             self.tray.set_idle()
 
-            # Reactivate the app the user was in before recording started
-            if _IS_MACOS and self._previous_app is not None:
-                try:
-                    # NSApplicationActivateIgnoringOtherApps = 1 << 1
-                    self._previous_app.activateWithOptions_(1 << 1)
-                    logger.debug(
-                        "Reactivated previous app: %s",
-                        self._previous_app.localizedName(),
+            # Reactivate the previous app and paste — must run on the main thread
+            # because NSApplication operations are not thread-safe on macOS.
+            def _activate_and_paste():
+                if _IS_MACOS and self._previous_app is not None:
+                    try:
+                        self._previous_app.activateWithOptions_(1 << 1)
+                        logger.debug(
+                            "Reactivated previous app: %s",
+                            self._previous_app.localizedName(),
+                        )
+                    except Exception as exc:
+                        logger.warning("Failed to reactivate previous app: %s", exc)
+
+                # Delay paste to let macOS complete the app switch.
+                # VS Code (Electron) needs ~1s; QTimer keeps us on the main thread.
+                def _do_paste():
+                    insert_text(
+                        full_text,
+                        restore_clipboard=self.settings.restore_clipboard,
+                        restore_delay=self.settings.clipboard_restore_delay,
                     )
-                except Exception as exc:
-                    logger.warning("Failed to reactivate previous app: %s", exc)
 
-            time.sleep(1.0)  # let macOS complete the app switch (Electron apps need ~1s)
+                QTimer.singleShot(1000, _do_paste)
 
-            # Insert into active field
-            insert_text(
-                full_text,
-                restore_clipboard=self.settings.restore_clipboard,
-                restore_delay=self.settings.clipboard_restore_delay,
-            )
+            QTimer.singleShot(0, _activate_and_paste)
 
             # Store in history
             self.history_window.add_entry(full_text)
