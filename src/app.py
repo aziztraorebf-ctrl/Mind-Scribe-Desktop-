@@ -21,6 +21,7 @@ from src.ui.overlay import RecordingOverlay
 from src.ui.sounds import play_ready, play_record_start, play_record_stop
 from src.ui.settings_window import SettingsWindow
 from src.ui.tray_icon import TrayIcon
+from src.core.vocabulary_store import VocabularyStore
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ class MindScribeApp:
     def __init__(self) -> None:
         # Load configuration
         self.settings = Settings.load()
+        self.vocabulary = VocabularyStore()
         env_keys = load_env()
         self.settings.merge_env(
             groq_key=env_keys["groq_api_key"],
@@ -61,7 +63,7 @@ class MindScribeApp:
             primary_provider=self.settings.primary_provider,
             model=self.settings.whisper_model,
             language=self.settings.language,
-            prompt=self.settings.prompt,
+            prompt=self._effective_prompt(),
         )
         self.hotkey_manager = HotkeyManager(
             on_toggle=self._on_hotkey_toggle,
@@ -109,6 +111,9 @@ class MindScribeApp:
         self.on_transcription_done: callable | None = None
         self.on_error: callable | None = None
         self.on_quit_request: callable | None = None
+
+    def _effective_prompt(self) -> str:
+        return self.settings.prompt + self.vocabulary.build_prompt_suffix()
 
     @property
     def state(self) -> AppState:
@@ -166,7 +171,7 @@ class MindScribeApp:
         # Update transcriber with new settings
         self.transcriber.language = settings.language
         self.transcriber.model = settings.whisper_model
-        self.transcriber.prompt = settings.prompt
+        self.transcriber.prompt = self._effective_prompt()
         self.transcriber.primary_provider = settings.primary_provider
 
         # Update recorder device (takes effect on next recording)
