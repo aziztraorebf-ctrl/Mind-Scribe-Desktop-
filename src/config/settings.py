@@ -53,6 +53,7 @@ class Settings:
     show_notifications: bool = True
     restore_clipboard: bool = True
     clipboard_restore_delay: float = 0.5  # seconds
+    active_style: str = "Default"
 
     @classmethod
     def config_path(cls) -> Path:

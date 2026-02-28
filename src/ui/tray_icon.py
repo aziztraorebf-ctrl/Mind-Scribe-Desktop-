@@ -39,14 +39,17 @@ class TrayIcon:
         on_toggle=None,
         on_settings=None,
         on_history=None,
+        on_dashboard=None,
         on_quit=None,
         hotkey_display: str = "Ctrl + Shift + Space",
     ):
         self._on_toggle = on_toggle
         self._on_settings = on_settings
         self._on_history = on_history
+        self._on_dashboard = on_dashboard
         self._on_quit = on_quit
         self._hotkey_display = hotkey_display
+        self._active_style = "Default"
         self._tray: QSystemTrayIcon | None = None
         self._menu: QMenu | None = None
         self._toggle_action: QAction | None = None
@@ -75,9 +78,15 @@ class TrayIcon:
 
         self._menu.addSeparator()
 
-        history_action = QAction("History", self._menu)
-        history_action.triggered.connect(self._handle_history)
-        self._menu.addAction(history_action)
+        dashboard_action = QAction("Dashboard", self._menu)
+        dashboard_action.triggered.connect(self._handle_dashboard)
+        self._menu.addAction(dashboard_action)
+
+        self._style_action = QAction(f"Style: {self._active_style}", self._menu)
+        self._style_action.setEnabled(False)
+        self._menu.addAction(self._style_action)
+
+        self._menu.addSeparator()
 
         settings_action = QAction("Settings", self._menu)
         settings_action.triggered.connect(self._handle_settings)
@@ -151,6 +160,10 @@ class TrayIcon:
         if self._on_history:
             self._on_history()
 
+    def _handle_dashboard(self) -> None:
+        if self._on_dashboard:
+            self._on_dashboard()
+
     def _handle_quit(self) -> None:
         if self._on_quit:
             self._on_quit()
@@ -158,4 +171,9 @@ class TrayIcon:
     def update_hotkey_display(self, new_display: str) -> None:
         """Rebuild the tray menu with an updated hotkey display string."""
         self._hotkey_display = new_display
+        QTimer.singleShot(0, self._build_menu)
+
+    def update_style_display(self, style_name: str) -> None:
+        """Update the active style shown in the tray menu."""
+        self._active_style = style_name
         QTimer.singleShot(0, self._build_menu)
