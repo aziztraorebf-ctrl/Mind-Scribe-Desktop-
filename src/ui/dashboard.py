@@ -351,6 +351,7 @@ class Dashboard(QWidget):
     _sig_open = pyqtSignal()
     _sig_raise = pyqtSignal()
     _sig_refresh_home = pyqtSignal()
+    _sig_hide = pyqtSignal()
 
     def __init__(
         self,
@@ -400,6 +401,7 @@ class Dashboard(QWidget):
         self._sig_open.connect(self._open_or_refresh)
         self._sig_raise.connect(self._raise_window)
         self._sig_refresh_home.connect(self._refresh_home_tab)
+        self._sig_hide.connect(self._do_hide)
 
     def set_hotkey_manager(self, manager) -> None:
         self._hotkey_manager = manager
@@ -414,6 +416,20 @@ class Dashboard(QWidget):
             self._sig_raise.emit()
             return
         self._sig_open.emit()
+
+    def hide_if_open(self) -> None:
+        """Hide the dashboard if currently open (thread-safe).
+
+        Called when recording starts so the user sees their target app in
+        the background instead of the Dashboard.
+        """
+        if self._is_open:
+            self._sig_hide.emit()
+
+    def _do_hide(self) -> None:
+        """Actually hide the window on the Qt main thread."""
+        self._is_open = False
+        self.hide()
 
     def _raise_window(self) -> None:
         self._sig_refresh_home.emit()

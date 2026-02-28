@@ -327,6 +327,9 @@ class MindScribeApp:
             logger.info("Recording will return to: %s", self._previous_app.localizedName())
         else:
             logger.warning("No previous app captured — text may not be inserted correctly.")
+        # Hide dashboard so the user's target app (e.g. VS Code) appears in the
+        # background behind the overlay, not the Dashboard.
+        self.dashboard.hide_if_open()
         self._set_state(AppState.RECORDING)
         self.tray.set_recording()
         self.overlay.show_recording()
