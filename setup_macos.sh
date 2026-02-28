@@ -243,7 +243,7 @@ write_step "Verifying critical imports"
 
 IMPORT_ERRORS=0
 
-for module in PyQt6 sounddevice pynput pystray; do
+for module in PyQt6 sounddevice pynput; do
     if "${VENV_PYTHON}" -c "import ${module}" 2>/dev/null; then
         write_success "${module} imports successfully."
     else

@@ -38,11 +38,13 @@ class TrayIcon:
         self,
         on_toggle=None,
         on_settings=None,
+        on_history=None,
         on_quit=None,
         hotkey_display: str = "Ctrl + Shift + Space",
     ):
         self._on_toggle = on_toggle
         self._on_settings = on_settings
+        self._on_history = on_history
         self._on_quit = on_quit
         self._hotkey_display = hotkey_display
         self._tray: QSystemTrayIcon | None = None
@@ -72,6 +74,10 @@ class TrayIcon:
         self._menu.addAction(self._toggle_action)
 
         self._menu.addSeparator()
+
+        history_action = QAction("History", self._menu)
+        history_action.triggered.connect(self._handle_history)
+        self._menu.addAction(history_action)
 
         settings_action = QAction("Settings", self._menu)
         settings_action.triggered.connect(self._handle_settings)
@@ -140,6 +146,10 @@ class TrayIcon:
     def _handle_settings(self) -> None:
         if self._on_settings:
             self._on_settings()
+
+    def _handle_history(self) -> None:
+        if self._on_history:
+            self._on_history()
 
     def _handle_quit(self) -> None:
         if self._on_quit:

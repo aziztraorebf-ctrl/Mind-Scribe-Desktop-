@@ -19,6 +19,10 @@ def _get_search_dirs() -> list[Path]:
     if getattr(sys, 'frozen', False):
         exe_dir = Path(sys.executable).resolve().parent
         dirs.append(exe_dir)
+        # macOS .app bundle: also check Resources/ (sibling of MacOS/)
+        resources_dir = exe_dir.parent / "Resources"
+        if resources_dir.is_dir():
+            dirs.append(resources_dir)
 
     # Current working directory
     dirs.append(Path.cwd())

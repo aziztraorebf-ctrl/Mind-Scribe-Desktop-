@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 # OS-adaptive UI fonts
 _UI_FONT = ".AppleSystemUIFont" if platform.system() == "Darwin" else "Segoe UI"
-_MONO_FONT = "SF Mono" if platform.system() == "Darwin" else "Consolas"
+_MONO_FONT = "Menlo" if platform.system() == "Darwin" else "Consolas"
 
 # Overlay dimensions
 WINDOW_WIDTH = 300
@@ -177,6 +177,8 @@ class RecordingOverlay(QWidget):
             | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setFixedSize(WINDOW_WIDTH, WINDOW_HEIGHT_RECORDING)
 
         # Main layout wraps a styled container
@@ -320,6 +322,13 @@ class RecordingOverlay(QWidget):
     # ------------------------------------------------------------------
 
     def _show_window(self, mode: str) -> None:
+        # Cancel any running fade animation to prevent race conditions
+        # (e.g. "ready" fade-out hiding the recording overlay)
+        if self._current_fade is not None:
+            self._current_fade.stop()
+            self._current_fade = None
+        self._opacity.setOpacity(0.92)
+
         current_pos = self.pos()
 
         if mode == "recording":
@@ -457,6 +466,12 @@ class RecordingOverlay(QWidget):
             self._fade_out(on_finished=self._finish_auto_hide)
 
     def _finish_auto_hide(self) -> None:
+        # Guard: only hide if we're still in a hideable state.
+        # If the user started recording during the fade-out, mode is no
+        # longer "ready"/"idle" and we must NOT touch the overlay.
+        if self._mode not in ("ready", "idle"):
+            self._opacity.setOpacity(0.92)
+            return
         self._mode = "idle"
         self._opacity.setOpacity(0.92)
         # Restore normal fonts

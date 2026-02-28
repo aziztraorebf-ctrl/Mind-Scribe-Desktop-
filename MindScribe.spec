@@ -39,9 +39,11 @@ a = Analysis(
         'src', 'src.app',
         'src.config', 'src.config.settings', 'src.config.dotenv_loader',
         'src.core', 'src.core.audio_recorder', 'src.core.chunker',
-        'src.core.hotkey_manager', 'src.core.text_inserter', 'src.core.transcriber',
+        'src.core.hotkey_manager', 'src.core.quartz_hotkey',
+        'src.core.text_inserter', 'src.core.transcriber',
         'src.ui', 'src.ui.icons', 'src.ui.notification',
         'src.ui.overlay', 'src.ui.settings_window', 'src.ui.tray_icon',
+        'src.ui.sounds', 'src.ui.history_window',
         'src.preflight_macos',
         # audioop replacement
         'audioop_lts', 'audioop',

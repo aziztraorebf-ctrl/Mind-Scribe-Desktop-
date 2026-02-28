@@ -32,6 +32,10 @@ def _get_env_search_dirs() -> list[Path]:
     if getattr(sys, "frozen", False):
         exe_dir = Path(sys.executable).resolve().parent
         dirs.append(exe_dir)
+        # macOS .app bundle: also check Resources/ (sibling of MacOS/)
+        resources_dir = exe_dir.parent / "Resources"
+        if resources_dir.is_dir():
+            dirs.append(resources_dir)
 
     # Current working directory
     dirs.append(Path.cwd())
@@ -93,7 +97,7 @@ def _check_pyobjc() -> list[str]:
         import objc  # noqa: F401
     except ImportError:
         warnings.append(
-            "PyObjC (objc) is not installed. pystray and pynput require it on macOS.\n"
+            "PyObjC (objc) is not installed. pynput requires it on macOS.\n"
             "  Fix: pip install pyobjc-framework-Cocoa pyobjc-framework-Quartz"
         )
     return warnings
@@ -123,11 +127,6 @@ def _check_pynput() -> list[str]:
             "  Fix: pip install pynput"
         )
     return warnings
-
-
-def _check_pystray() -> list[str]:
-    """No longer needed — tray icon now uses PyQt6 QSystemTrayIcon."""
-    return []
 
 
 def _check_env_file() -> list[str]:
@@ -187,7 +186,6 @@ def run_preflight_checks() -> tuple[list[str], bool]:
     warnings.extend(_check_pyobjc())
     warnings.extend(_check_pillow())
     warnings.extend(_check_pynput())
-    warnings.extend(_check_pystray())
     warnings.extend(_check_env_file())
 
     # Determine if any critical (blocking) dependency is missing
