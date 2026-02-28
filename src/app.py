@@ -132,16 +132,30 @@ class MindScribeApp:
 
         Called from hotkey callbacks BEFORE any UI change (overlay show, etc.)
         so we always capture the real user app, not our own window.
+
+        When running as a plain Python script (not a packaged .app), NSWorkspace
+        reports the process as "python" with no bundle ID.  We filter by PID
+        comparison instead of by name/bundle in that case.
         """
         if not _IS_MACOS:
             return
         try:
+            import os
             from AppKit import NSWorkspace
             candidate = NSWorkspace.sharedWorkspace().frontmostApplication()
             if candidate is None:
                 return
+            # Filter out our own process (works whether packaged or run as python)
+            if candidate.processIdentifier() == os.getpid():
+                logger.debug(
+                    "frontmost app is our own process (pid=%d), keeping previous: %s",
+                    os.getpid(),
+                    self._previous_app.localizedName() if self._previous_app else "None",
+                )
+                return
             name = candidate.localizedName() or ""
             bundle = candidate.bundleIdentifier() or ""
+            # Belt-and-suspenders: also filter by name/bundle for packaged .app
             if "MindScribe" in name or bundle.startswith("com.mindscribe"):
                 logger.debug(
                     "frontmost app is MindScribe (%s), keeping previous: %s",
@@ -150,7 +164,7 @@ class MindScribeApp:
                 )
                 return
             self._previous_app = candidate
-            logger.info("Captured previous app: %s", name)
+            logger.info("Captured previous app: %s (pid=%d)", name, candidate.processIdentifier())
         except Exception as exc:
             logger.warning("Could not capture previous app: %s", exc)
 
@@ -398,23 +412,35 @@ class MindScribeApp:
             # activateWithOptions_ from a background thread is non-deterministic.
             if _IS_MACOS and self._previous_app is not None:
                 try:
-                    bundle_id = self._previous_app.bundleIdentifier() or ""
-                    app_name = self._previous_app.localizedName() or ""
+                    import os
                     import subprocess
-                    if bundle_id:
-                        script = f'tell application id "{bundle_id}" to activate'
-                    elif app_name:
-                        safe_name = app_name.replace('"', '\\"')
-                        script = f'tell application "{safe_name}" to activate'
-                    else:
-                        script = None
-                    if script:
-                        subprocess.run(
-                            ["osascript", "-e", script],
-                            capture_output=True,
-                            timeout=3,
+                    # Safety: never activate our own process (happens when running
+                    # as plain python script — NSWorkspace reports us as "python"
+                    # with no bundle ID, which would land the paste in MindScribe).
+                    if self._previous_app.processIdentifier() == os.getpid():
+                        logger.warning(
+                            "previous_app points to our own process — skipping activation"
                         )
-                        logger.debug("Reactivated previous app via osascript: %s", app_name or bundle_id)
+                    else:
+                        bundle_id = self._previous_app.bundleIdentifier() or ""
+                        app_name = self._previous_app.localizedName() or ""
+                        if bundle_id:
+                            script = f'tell application id "{bundle_id}" to activate'
+                        elif app_name:
+                            safe_name = app_name.replace('"', '\\"')
+                            script = f'tell application "{safe_name}" to activate'
+                        else:
+                            script = None
+                        if script:
+                            subprocess.run(
+                                ["osascript", "-e", script],
+                                capture_output=True,
+                                timeout=3,
+                            )
+                            logger.debug(
+                                "Reactivated previous app via osascript: %s",
+                                app_name or bundle_id,
+                            )
                 except Exception as exc:
                     logger.warning("Failed to reactivate previous app: %s", exc)
 
