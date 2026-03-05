@@ -7,6 +7,7 @@ Whisper hallucinations on silent audio).
 
 import io
 import logging
+import threading
 import wave
 
 import numpy as np
@@ -19,18 +20,25 @@ _MIN_SILENCE_DURATION_MS = 100
 
 _vad_model = None
 _get_speech_timestamps_fn = None
+_torch = None  # cached at model-load time to avoid repeated hot-path imports
+_vad_lock = threading.Lock()
 
 
 def _get_model():
-    global _vad_model, _get_speech_timestamps_fn
-    if _vad_model is None:
-        try:
-            from silero_vad import load_silero_vad, get_speech_timestamps
-            _vad_model = load_silero_vad()
-            _get_speech_timestamps_fn = get_speech_timestamps
-            logger.info("Silero VAD model loaded")
-        except Exception as exc:
-            logger.warning("Could not load Silero VAD: %s — VAD disabled", exc)
+    global _vad_model, _get_speech_timestamps_fn, _torch
+    if _vad_model is not None:
+        return _vad_model, _get_speech_timestamps_fn
+    with _vad_lock:
+        if _vad_model is None:  # double-check sous lock
+            try:
+                import torch
+                from silero_vad import load_silero_vad, get_speech_timestamps
+                _torch = torch
+                _vad_model = load_silero_vad()
+                _get_speech_timestamps_fn = get_speech_timestamps
+                logger.info("Silero VAD model loaded")
+            except Exception as exc:
+                logger.warning("Could not load Silero VAD: %s — VAD disabled", exc)
     return _vad_model, _get_speech_timestamps_fn
 
 
@@ -65,9 +73,15 @@ def filter_silence(wav_bytes: bytes) -> bytes:
             raw = wf.readframes(wf.getnframes())
             sample_rate = wf.getframerate()
 
-        import torch
+        if sample_rate not in (8000, 16000):
+            logger.warning(
+                "VAD expects 8kHz or 16kHz audio, got %dHz — returning original",
+                sample_rate,
+            )
+            return wav_bytes
+
         samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-        audio_tensor = torch.from_numpy(samples)
+        audio_tensor = _torch.from_numpy(samples)
 
         speech_segments = get_speech_timestamps(
             audio_tensor,
@@ -99,7 +113,8 @@ def filter_silence(wav_bytes: bytes) -> bytes:
             wf.setnchannels(1)
             wf.setsampwidth(2)
             wf.setframerate(sample_rate)
-            wf.writeframes((speech_audio * 32768.0).astype(np.int16).tobytes())
+            clipped = np.clip(speech_audio, -1.0, 1.0)
+            wf.writeframes((clipped * 32767.0).astype(np.int16).tobytes())
 
         return out_buf.getvalue()
 

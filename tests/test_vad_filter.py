@@ -56,7 +56,10 @@ def _mock_model_and_fn(speech_segments):
 class TestFilterSilence:
     def test_returns_bytes(self):
         """filter_silence must always return bytes."""
-        result = filter_silence(_make_audio())
+        with patch("src.core.vad_filter._vad_model", new=MagicMock()), \
+             patch("src.core.vad_filter._get_speech_timestamps_fn",
+                   new=lambda *a, **kw: [{"start": 0, "end": 16000}]):
+            result = filter_silence(_make_audio())
         assert isinstance(result, bytes)
 
     def test_empty_input_returns_empty(self):
