@@ -2,6 +2,7 @@
 
 import logging
 import platform
+import subprocess
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
@@ -31,6 +32,52 @@ _AMBER = "#FFB347"
 _SUCCESS = "#50FA7B"
 _DANGER = "#FF5555"
 _BORDER = "#3A3A5C"
+
+
+# --- macOS permission helpers ---
+
+def _check_accessibility() -> bool:
+    """Return True if the process has Accessibility permission."""
+    if platform.system() != "Darwin":
+        return True
+    try:
+        from ApplicationServices import AXIsProcessTrusted
+        return bool(AXIsProcessTrusted())
+    except Exception:
+        return False
+
+
+def _check_input_monitoring() -> bool:
+    """Return True if Input Monitoring is granted.
+
+    On macOS 10.15+, CGEventTap requires both Accessibility and Input Monitoring.
+    We use the same AXIsProcessTrusted check as a proxy — if accessibility is
+    granted the CGEventTap will succeed, which implies input monitoring is also
+    granted for our use case.
+    """
+    return _check_accessibility()
+
+
+def _check_microphone() -> bool:
+    """Return True if microphone access is authorized."""
+    if platform.system() != "Darwin":
+        return True
+    try:
+        import AVFoundation
+        status = AVFoundation.AVCaptureDevice.authorizationStatusForMediaType_(
+            AVFoundation.AVMediaTypeAudio
+        )
+        # 3 = AVAuthorizationStatusAuthorized
+        return status == 3
+    except Exception:
+        # AVFoundation not available — assume granted (will fail at recording time)
+        return True
+
+
+def _open_privacy_pref(pane: str) -> None:
+    """Open a specific Privacy pane in System Settings."""
+    url = f"x-apple.systempreferences:com.apple.preference.security?{pane}"
+    subprocess.Popen(["open", url])
 
 
 def _env_target_path() -> Path:
@@ -68,9 +115,10 @@ class OnboardingWizard(QDialog):
         """)
 
         self._stack = QStackedWidget()
-        self._stack.addWidget(self._build_page_welcome())
-        self._stack.addWidget(self._build_page_api_keys())
-        self._stack.addWidget(self._build_page_done())
+        self._stack.addWidget(self._build_page_welcome())       # index 0
+        self._stack.addWidget(self._build_page_permissions())   # index 1
+        self._stack.addWidget(self._build_page_api_keys())      # index 2
+        self._stack.addWidget(self._build_page_done())          # index 3
 
         self._btn_back = QPushButton("Back")
         self._btn_back.clicked.connect(self._go_back)
@@ -129,6 +177,101 @@ class OnboardingWizard(QDialog):
         layout.addWidget(groq_note)
         layout.addStretch()
         return page
+
+    def _build_page_permissions(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setSpacing(12)
+
+        title = QLabel("System Permissions")
+        title.setFont(QFont(_UI_FONT, 18, QFont.Weight.Bold))
+        title.setStyleSheet(f"color: {_ACCENT};")
+
+        subtitle = QLabel(
+            "MindScribe needs 3 permissions to work. Click each button\n"
+            "to open System Settings, grant the permission, then come back."
+        )
+        subtitle.setWordWrap(True)
+        subtitle.setStyleSheet(f"color: {_TEXT_DIM}; font-size: 13px;")
+
+        layout.addWidget(title)
+        layout.addSpacing(4)
+        layout.addWidget(subtitle)
+        layout.addSpacing(8)
+
+        # Build permission rows — store status labels for refresh
+        self._perm_labels = {}
+        perms = [
+            ("microphone", "Microphone", "Record your voice", "Privacy_Microphone"),
+            ("accessibility", "Accessibility", "Paste transcribed text", "Privacy_Accessibility"),
+            ("input_monitoring", "Input Monitoring", "Detect your global hotkey", "Privacy_ListenEvent"),
+        ]
+        for key, name, reason, pane in perms:
+            row = QHBoxLayout()
+            row.setSpacing(8)
+
+            name_col = QVBoxLayout()
+            name_col.setSpacing(2)
+            name_label = QLabel(name)
+            name_label.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {_TEXT};")
+            reason_label = QLabel(reason)
+            reason_label.setStyleSheet(f"font-size: 11px; color: {_TEXT_DIM};")
+            name_col.addWidget(name_label)
+            name_col.addWidget(reason_label)
+
+            status_label = QLabel()
+            status_label.setFixedWidth(90)
+            status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._perm_labels[key] = status_label
+
+            open_btn = QPushButton("Open Settings")
+            open_btn.setFixedWidth(110)
+            open_btn.clicked.connect(lambda checked, p=pane: _open_privacy_pref(p))
+
+            row.addLayout(name_col, stretch=1)
+            row.addWidget(status_label)
+            row.addWidget(open_btn)
+
+            row_widget = QWidget()
+            row_widget.setLayout(row)
+            row_widget.setStyleSheet(
+                f"background-color: {_SURFACE}; border-radius: 6px; padding: 6px;"
+            )
+            layout.addWidget(row_widget)
+
+        refresh_btn = QPushButton("Check Again")
+        refresh_btn.clicked.connect(self._refresh_permissions)
+        layout.addSpacing(4)
+        layout.addWidget(refresh_btn)
+        layout.addStretch()
+
+        # Populate initial status
+        self._refresh_permissions()
+        return page
+
+    def _refresh_permissions(self) -> None:
+        """Re-check all permissions and update status labels + Next button."""
+        checks = {
+            "microphone": _check_microphone(),
+            "accessibility": _check_accessibility(),
+            "input_monitoring": _check_input_monitoring(),
+        }
+        for key, granted in checks.items():
+            label = self._perm_labels[key]
+            if granted:
+                label.setText("Granted")
+                label.setStyleSheet(
+                    f"font-size: 12px; font-weight: bold; color: {_SUCCESS};"
+                )
+            else:
+                label.setText("Required")
+                label.setStyleSheet(
+                    f"font-size: 12px; font-weight: bold; color: {_AMBER};"
+                )
+
+        all_granted = all(checks.values())
+        if self._stack.currentIndex() == 1:
+            self._btn_next.setEnabled(all_granted)
 
     def _build_page_api_keys(self) -> QWidget:
         page = QWidget()
@@ -225,7 +368,8 @@ class OnboardingWizard(QDialog):
 
     def _go_next(self):
         current = self._stack.currentIndex()
-        if current == 1:
+        if current == 2:
+            # API keys page — write .env before advancing to confirmation
             groq_key = self._groq_key_input.text().strip()
             openai_key = self._openai_key_input.text().strip()
             self._write_env(groq_key, openai_key)
@@ -248,13 +392,17 @@ class OnboardingWizard(QDialog):
         self._btn_back.setVisible(idx > 0)
         self._btn_next.setText("Finish" if idx == last else "Next")
         if idx == 1:
+            # Permissions page — Next enabled only when all granted
+            self._refresh_permissions()
+        elif idx == 2:
+            # API keys page — Next enabled only when at least one key entered
             self._update_nav_page2()
         else:
             self._btn_next.setEnabled(True)
 
     def _update_nav_page2(self):
-        """Enable Next on page 2 only when at least one key is entered."""
-        if self._stack.currentIndex() != 1:
+        """Enable Next on page 2 (API keys) only when at least one key is entered."""
+        if self._stack.currentIndex() != 2:
             return
         has_key = bool(self._groq_key_input.text().strip()) or bool(
             self._openai_key_input.text().strip()

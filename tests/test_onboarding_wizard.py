@@ -12,10 +12,10 @@ def qt_app():
 
 
 class TestOnboardingWizardStructure:
-    def test_wizard_has_three_pages(self, qt_app):
+    def test_wizard_has_four_pages(self, qt_app):
         from src.ui.onboarding_wizard import OnboardingWizard
         wizard = OnboardingWizard()
-        assert wizard._stack.count() == 3
+        assert wizard._stack.count() == 4
 
     def test_wizard_starts_on_page_zero(self, qt_app):
         from src.ui.onboarding_wizard import OnboardingWizard
@@ -56,7 +56,7 @@ class TestApiKeyPage:
     def test_next_disabled_when_no_key(self, qt_app):
         from src.ui.onboarding_wizard import OnboardingWizard
         wizard = OnboardingWizard()
-        wizard._go_next()  # advance to page 2
+        wizard._stack.setCurrentIndex(2)  # API keys page is now index 2
         wizard._groq_key_input.setText("")
         wizard._openai_key_input.setText("")
         wizard._update_nav_page2()
@@ -100,7 +100,7 @@ class TestDonePage:
         from src.ui.onboarding_wizard import OnboardingWizard
         from unittest.mock import patch
         wizard = OnboardingWizard()
-        wizard._stack.setCurrentIndex(2)
+        wizard._stack.setCurrentIndex(3)  # Done page is now index 3
         wizard._update_nav()
         with patch.object(wizard, "accept"):
             wizard._go_next()
