@@ -308,6 +308,10 @@ class RecordingOverlay(QWidget):
         self._mode = "transcribing"
         self._sig_show.emit("transcribing")
 
+    def show_processing(self) -> None:
+        self._mode = "transcribing"  # reuse dots animation
+        self._sig_show.emit("processing")
+
     def show_ready(self, hotkey_display: str) -> None:
         self._mode = "ready"
         self._ready_hotkey = hotkey_display
@@ -353,6 +357,16 @@ class RecordingOverlay(QWidget):
 
         elif mode == "transcribing":
             self._status_label.setText("Transcribing...")
+            self._status_label.setStyleSheet("color: %s;" % AMBER_ACCENT)
+            self._timer_label.setText("")
+            self._waveform.hide()
+            self._btn_container.hide()
+            self.setFixedSize(WINDOW_WIDTH, WINDOW_HEIGHT_TRANSCRIBING)
+            if current_pos.x() > 0:
+                self.move(current_pos)
+
+        elif mode == "processing":
+            self._status_label.setText("Processing...")
             self._status_label.setStyleSheet("color: %s;" % AMBER_ACCENT)
             self._timer_label.setText("")
             self._waveform.hide()

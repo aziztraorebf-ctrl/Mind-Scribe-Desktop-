@@ -415,6 +415,8 @@ class MindScribeApp:
             # Optional LLM post-processing (clean up formatting)
             if self.settings.post_process and full_text:
                 logger.info("Post-processing transcription...")
+                if not from_overlay:
+                    self.overlay.show_processing()
                 full_text = self.transcriber.post_process(full_text)
 
             # Hide overlay BEFORE pasting so the OS returns focus to the
