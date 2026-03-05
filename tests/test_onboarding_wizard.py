@@ -40,3 +40,77 @@ class TestOnboardingWizardStructure:
         wizard = OnboardingWizard()
         wizard.reject()
         assert wizard._completed is False
+
+
+class TestApiKeyPage:
+    def test_groq_key_field_exists(self, qt_app):
+        from src.ui.onboarding_wizard import OnboardingWizard
+        wizard = OnboardingWizard()
+        assert hasattr(wizard, "_groq_key_input")
+
+    def test_openai_key_field_exists(self, qt_app):
+        from src.ui.onboarding_wizard import OnboardingWizard
+        wizard = OnboardingWizard()
+        assert hasattr(wizard, "_openai_key_input")
+
+    def test_next_disabled_when_no_key(self, qt_app):
+        from src.ui.onboarding_wizard import OnboardingWizard
+        wizard = OnboardingWizard()
+        wizard._go_next()  # advance to page 2
+        wizard._groq_key_input.setText("")
+        wizard._openai_key_input.setText("")
+        wizard._update_nav_page2()
+        assert not wizard._btn_next.isEnabled()
+
+    def test_next_enabled_when_groq_key_entered(self, qt_app):
+        from src.ui.onboarding_wizard import OnboardingWizard
+        wizard = OnboardingWizard()
+        wizard._go_next()
+        wizard._groq_key_input.setText("gsk_abc123")
+        wizard._update_nav_page2()
+        assert wizard._btn_next.isEnabled()
+
+    def test_write_env_creates_file(self, qt_app, tmp_path):
+        from src.ui.onboarding_wizard import OnboardingWizard
+        wizard = OnboardingWizard()
+        env_path = tmp_path / ".env"
+        wizard._write_env("gsk_test_key", "", env_path)
+        content = env_path.read_text()
+        assert "GROQ_API_KEY=gsk_test_key" in content
+
+    def test_write_env_includes_openai_when_provided(self, qt_app, tmp_path):
+        from src.ui.onboarding_wizard import OnboardingWizard
+        wizard = OnboardingWizard()
+        env_path = tmp_path / ".env"
+        wizard._write_env("gsk_test", "sk-openai", env_path)
+        content = env_path.read_text()
+        assert "OPENAI_API_KEY=sk-openai" in content
+
+    def test_write_env_omits_openai_when_empty(self, qt_app, tmp_path):
+        from src.ui.onboarding_wizard import OnboardingWizard
+        wizard = OnboardingWizard()
+        env_path = tmp_path / ".env"
+        wizard._write_env("gsk_test", "", env_path)
+        content = env_path.read_text()
+        assert "OPENAI_API_KEY" not in content
+
+
+class TestDonePage:
+    def test_finish_sets_completed_true(self, qt_app):
+        from src.ui.onboarding_wizard import OnboardingWizard
+        from unittest.mock import patch
+        wizard = OnboardingWizard()
+        wizard._stack.setCurrentIndex(2)
+        wizard._update_nav()
+        with patch.object(wizard, "accept"):
+            wizard._go_next()
+        assert wizard._completed is True
+
+    def test_run_returns_true_after_finish(self, qt_app):
+        from src.ui.onboarding_wizard import OnboardingWizard
+        from unittest.mock import patch
+        wizard = OnboardingWizard()
+        with patch.object(wizard, "exec", return_value=None):
+            wizard._completed = True
+            result = wizard.run()
+        assert result is True
