@@ -67,6 +67,18 @@ def main():
     qt_app.setQuitOnLastWindowClosed(False)  # Keep running as tray app
     qt_app.setApplicationName("MindScribe Desktop")
 
+    # --- First-launch detection ---
+    from src.config.dotenv_loader import load_env as _pre_check_env
+    _pre_env = _pre_check_env()
+    if not _pre_env["groq_api_key"] and not _pre_env["openai_api_key"]:
+        from src.ui.onboarding_wizard import OnboardingWizard
+        wizard = OnboardingWizard()
+        if not wizard.run():
+            logger.info("Onboarding cancelled by user. Exiting.")
+            sys.exit(0)
+        logger.info("Onboarding completed. Continuing startup.")
+    # --- End first-launch detection ---
+
     app = MindScribeApp()
 
     def on_state_change(state):
