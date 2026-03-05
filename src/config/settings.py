@@ -28,7 +28,7 @@ class Settings:
     groq_api_key: str = ""
     openai_api_key: str = ""
     primary_provider: str = "groq"  # "groq" or "openai"
-    whisper_model: str = "whisper-large-v3"  # whisper-large-v3 or whisper-large-v3-turbo
+    whisper_model: str = "whisper-large-v3-turbo"  # whisper-large-v3 or whisper-large-v3-turbo
 
     # Recording
     hotkey: str = field(default_factory=_default_hotkey)
