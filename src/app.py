@@ -24,6 +24,7 @@ from src.ui.sounds import play_ready, play_record_start, play_record_stop
 from src.ui.settings_window import SettingsWindow
 from src.ui.tray_icon import TrayIcon
 from src.core.vocabulary_store import VocabularyStore
+from src.core.vad_filter import filter_silence
 
 logger = logging.getLogger(__name__)
 
@@ -381,6 +382,17 @@ class MindScribeApp:
             if from_overlay:
                 # Give Windows time to return focus to the previous window
                 time.sleep(0.3)
+            # Strip silence before sending to API
+            wav_data = filter_silence(wav_data)
+            if not wav_data:
+                logger.info("VAD: no speech detected, skipping transcription")
+                self.overlay.hide()
+                self.tray.set_idle()
+                self._set_state(AppState.IDLE)
+                if self.settings.show_notifications:
+                    notify("MindScribe", "No speech detected.")
+                return
+
             # Prepare audio (compress/chunk if needed)
             audio_chunks = prepare_audio(wav_data)
 
@@ -403,6 +415,8 @@ class MindScribeApp:
             # Optional LLM post-processing (clean up formatting)
             if self.settings.post_process and full_text:
                 logger.info("Post-processing transcription...")
+                if not from_overlay:
+                    self.overlay.show_processing()
                 full_text = self.transcriber.post_process(full_text)
 
             # Hide overlay BEFORE pasting so the OS returns focus to the

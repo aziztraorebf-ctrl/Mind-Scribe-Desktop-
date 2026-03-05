@@ -113,10 +113,11 @@ class Transcriber:
         audio_file = io.BytesIO(audio_wav)
         audio_file.name = "recording.wav"
 
+        lang = None if self.language in ("auto", "", None) else self.language
         response = self._groq.audio.transcriptions.create(
             file=audio_file,
             model=self.model,
-            language=self.language,
+            language=lang,
             prompt=self.prompt or None,
             response_format="text",
         )
@@ -131,10 +132,11 @@ class Transcriber:
         audio_file = io.BytesIO(audio_wav)
         audio_file.name = "recording.wav"
 
+        lang = None if self.language in ("auto", "", None) else self.language
         response = self._openai.audio.transcriptions.create(
             file=audio_file,
             model="whisper-1",
-            language=self.language,
+            language=lang,
             prompt=self.prompt or None,
             response_format="text",
         )
@@ -184,7 +186,7 @@ class Transcriber:
         if self._groq:
             try:
                 response = self._groq.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
+                    model="llama-3.1-8b-instant",
                     messages=messages,
                     temperature=0.1,
                     max_tokens=4096,
