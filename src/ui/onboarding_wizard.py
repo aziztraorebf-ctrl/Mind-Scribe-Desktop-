@@ -5,10 +5,11 @@ import platform
 import subprocess
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal, QObject
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -92,9 +93,14 @@ class OnboardingWizard(QDialog):
     Call run() -- returns True if user completed setup, False if closed.
     """
 
+    _sig_test_result = pyqtSignal(bool, str)
+    _sig_perm_results = pyqtSignal(dict)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._completed = False
+        self._sig_test_result.connect(self._on_test_result)
+        self._sig_perm_results.connect(self._apply_permission_results)
 
         self.setWindowTitle("MindScribe - First Setup")
         self.setModal(True)
@@ -227,12 +233,13 @@ class OnboardingWizard(QDialog):
             row.addWidget(status_label)
             row.addWidget(open_btn)
 
-            row_widget = QWidget()
-            row_widget.setLayout(row)
-            row_widget.setStyleSheet(
-                f"background-color: {_SURFACE}; border-radius: 6px; padding: 8px 12px;"
+            row_frame = QFrame()
+            row_frame.setLayout(row)
+            row_frame.setStyleSheet(
+                f"QFrame {{ background-color: {_SURFACE}; border-radius: 6px; }}"
             )
-            layout.addWidget(row_widget)
+            row_frame.setContentsMargins(12, 8, 12, 8)
+            layout.addWidget(row_frame)
 
         refresh_btn = QPushButton("Check Again")
         refresh_btn.clicked.connect(self._refresh_permissions)
@@ -254,8 +261,7 @@ class OnboardingWizard(QDialog):
                 "accessibility": _check_accessibility(),
                 "input_monitoring": _check_input_monitoring(),
             }
-            from PyQt6.QtCore import QTimer
-            QTimer.singleShot(0, lambda: self._apply_permission_results(checks))
+            self._sig_perm_results.emit(checks)
 
         threading.Thread(target=_do_check, daemon=True).start()
 
@@ -454,8 +460,7 @@ class OnboardingWizard(QDialog):
             except Exception as exc:
                 ok, msg = False, f"Connection error: {exc}"
 
-            from PyQt6.QtCore import QTimer
-            QTimer.singleShot(0, lambda: self._on_test_result(ok, msg))
+            self._sig_test_result.emit(ok, msg)
 
         threading.Thread(target=_do_test, daemon=True).start()
 
