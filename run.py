@@ -77,6 +77,8 @@ def main():
             logger.info("Onboarding cancelled by user. Exiting.")
             sys.exit(0)
         logger.info("Onboarding completed. Continuing startup.")
+        # Reload env so MindScribeApp picks up the keys just written by the wizard
+        _pre_check_env()
     # --- End first-launch detection ---
 
     app = MindScribeApp()

@@ -208,19 +208,14 @@ class OnboardingWizard(QDialog):
         ]
         for key, name, reason, pane in perms:
             row = QHBoxLayout()
-            row.setSpacing(8)
+            row.setSpacing(12)
 
-            name_col = QVBoxLayout()
-            name_col.setSpacing(2)
-            name_label = QLabel(name)
-            name_label.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {_TEXT};")
-            reason_label = QLabel(reason)
-            reason_label.setStyleSheet(f"font-size: 11px; color: {_TEXT_DIM};")
-            name_col.addWidget(name_label)
-            name_col.addWidget(reason_label)
+            name_label = QLabel(f"<b>{name}</b><br><span style='color:{_TEXT_DIM}; font-size:11px;'>{reason}</span>")
+            name_label.setStyleSheet(f"font-size: 13px; color: {_TEXT};")
+            name_label.setMinimumWidth(180)
 
             status_label = QLabel()
-            status_label.setFixedWidth(90)
+            status_label.setFixedWidth(80)
             status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._perm_labels[key] = status_label
 
@@ -228,14 +223,14 @@ class OnboardingWizard(QDialog):
             open_btn.setFixedWidth(110)
             open_btn.clicked.connect(lambda checked, p=pane: _open_privacy_pref(p))
 
-            row.addLayout(name_col, stretch=1)
+            row.addWidget(name_label, stretch=1)
             row.addWidget(status_label)
             row.addWidget(open_btn)
 
             row_widget = QWidget()
             row_widget.setLayout(row)
             row_widget.setStyleSheet(
-                f"background-color: {_SURFACE}; border-radius: 6px; padding: 6px;"
+                f"background-color: {_SURFACE}; border-radius: 6px; padding: 8px 12px;"
             )
             layout.addWidget(row_widget)
 
@@ -250,12 +245,22 @@ class OnboardingWizard(QDialog):
         return page
 
     def _refresh_permissions(self) -> None:
-        """Re-check all permissions and update status labels + Next button."""
-        checks = {
-            "microphone": _check_microphone(),
-            "accessibility": _check_accessibility(),
-            "input_monitoring": _check_input_monitoring(),
-        }
+        """Re-check all permissions in a background thread, update UI on completion."""
+        import threading
+
+        def _do_check():
+            checks = {
+                "microphone": _check_microphone(),
+                "accessibility": _check_accessibility(),
+                "input_monitoring": _check_input_monitoring(),
+            }
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: self._apply_permission_results(checks))
+
+        threading.Thread(target=_do_check, daemon=True).start()
+
+    def _apply_permission_results(self, checks: dict) -> None:
+        """Apply permission check results to UI (must run on Qt thread)."""
         for key, granted in checks.items():
             label = self._perm_labels[key]
             if granted:

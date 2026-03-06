@@ -32,6 +32,15 @@ def _get_search_dirs() -> list[Path]:
     if project_root not in dirs:
         dirs.append(project_root)
 
+    # Application Support — written by the onboarding wizard on first launch
+    try:
+        from src.config.settings import Settings
+        app_support = Settings.config_path().parent
+        if app_support not in dirs:
+            dirs.append(app_support)
+    except Exception:
+        pass
+
     return dirs
 
 
